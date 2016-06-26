@@ -81,6 +81,36 @@ LOCAL_SHARED_LIBRARIES := \
 	libutils \
 	liblog
 
+# --- MediaTek -------------------------------------------------------------------------------------
+ifneq (, $(findstring MTK_AOSP_ENHANCEMENT, $(COMMON_GLOBAL_CPPFLAGS)))
+	MTK_PATH = mediatek
+	LOCAL_SRC_FILES += \
+		$(MTK_PATH)/BufferQueueDump.cpp \
+		$(MTK_PATH)/BufferQueueDebug.cpp \
+		$(MTK_PATH)/BufferQueueMonitor.cpp
+
+	LOCAL_C_INCLUDES += \
+		$(TOP)/$(MTK_ROOT)/hardware/gralloc_extra/include \
+		$(TOP)/$(MTK_ROOT)/hardware/include \
+		$(TOP)/$(MTK_ROOT)/hardware/ui_ext/inc
+
+	LOCAL_CPPFLAGS += \
+		-Wno-old-style-cast \
+		-Wno-shift-sign-overflow \
+		-Wno-gnu-statement-expression
+
+	LOCAL_SHARED_LIBRARIES += \
+		libdl \
+		libhardware \
+		libui_ext \
+		libgralloc_extra
+
+ifeq ($(MTK_EMULATOR_SUPPORT), yes)
+	LOCAL_CFLAGS += -DMTK_EMULATOR_SUPPORT
+endif
+
+endif
+# --------------------------------------------------------------------------------------------------
 
 LOCAL_MODULE := libgui
 

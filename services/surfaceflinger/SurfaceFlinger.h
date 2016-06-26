@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -69,6 +74,11 @@ class LayerDim;
 class Surface;
 class RenderEngine;
 class EventControlThread;
+#ifdef MTK_AOSP_ENHANCEMENT
+#ifndef MTK_EMULATOR_SUPPORT
+class Resync;
+#endif
+#endif
 
 // ---------------------------------------------------------------------------
 
@@ -139,6 +149,11 @@ private:
     friend class DisplayEventConnection;
     friend class Layer;
     friend class MonitoredProducer;
+#ifdef MTK_AOSP_ENHANCEMENT
+#ifndef MTK_EMULATOR_SUPPORT
+    friend class Resync;
+#endif
+#endif
 
     // This value is specified in number of frames.  Log frame stats at most
     // every half hour.
@@ -445,7 +460,6 @@ private:
     RenderEngine* mRenderEngine;
     nsecs_t mBootTime;
     bool mGpuToCpuSupported;
-    bool mDropMissedFrames;
     sp<EventThread> mEventThread;
     sp<EventThread> mSFEventThread;
     sp<EventControlThread> mEventControlThread;
@@ -506,6 +520,80 @@ private:
     nsecs_t mFrameBuckets[NUM_BUCKETS];
     nsecs_t mTotalTime;
     nsecs_t mLastSwapTime;
+
+#ifdef MTK_AOSP_ENHANCEMENT
+private:
+    // boot time info
+    bool mBootAnimationEnabled;
+
+    // used to avoid race condition between handleMessageRefresh() and dumpAllLocked()
+    mutable Mutex mDumpLock;
+
+    // for debug
+    void setMTKProperties();
+    void setMTKProperties(String8 &result);
+
+    // decide to run boot animation
+    void checkEnableBootAnim();
+
+    // set boot done msg
+    void bootProf(int start) const;
+
+public:
+    // helper class for collect related property settings
+    struct PropertiesState {
+        PropertiesState()
+            : mHwRotation(0)
+            , mLogRepaint(false)
+            , mLogTransaction(false)
+            , mLineG3D(false)
+            , mLineSS(false)
+            , mDumpScreenShot(0)
+            , mDelayTime(0)
+            , mDebugSkipComp(false)
+            , mAppVSyncOffset(0)
+            , mSfVSyncOffset(0)
+            , mBqCount(3)
+        { }
+
+        // for phyical panel rotation info
+        int mHwRotation;
+
+        // sf repaint log info
+        bool mLogRepaint;
+
+        // log layer state transaction
+        bool mLogTransaction;
+
+        // debug G3D render
+        bool mLineG3D;
+
+        // debug screenshot
+        bool mLineSS;
+
+        // debug screen shot result, enabled if value > 0, and increases after each dump
+        uint32_t mDumpScreenShot;
+
+        // for enabling slow motion
+        uint32_t mDelayTime;
+
+        // debug composition enhancement
+        bool mDebugSkipComp;
+
+        // for VSyncOffset
+        int64_t mAppVSyncOffset;
+        int64_t mSfVSyncOffset;
+
+        // for number of buffer in a BufferQueue
+        int mBqCount;
+    };
+    static PropertiesState sPropertiesState;
+
+    // for SF watch dog identity
+    uint32_t mWatchDogIndex;
+
+    bool getBootFinished() { return mBootFinished; }
+#endif
 };
 
 }; // namespace android

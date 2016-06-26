@@ -341,12 +341,10 @@ public:
     };
 
 private:
-    size_t mOpenAshmemSize;
+    size_t mBlobAshmemSize;
 
 public:
-    // TODO: Remove once ABI can be changed.
     size_t getBlobAshmemSize() const;
-    size_t getOpenAshmemSize() const;
 };
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -77,6 +82,18 @@
 
 #include "RenderEngine/RenderEngine.h"
 #include <cutils/compiler.h>
+
+#ifdef MTK_AOSP_ENHANCEMENT
+#include <sys/ioctl.h>
+#include <stdio.h>
+#include <fcntl.h>
+#include <ui/Fence.h>
+#include <GraphicBufferUtil.h>
+#ifndef MTK_EMULATOR_SUPPORT
+#include "mediatek/Resync.h"
+#endif
+#include "mediatek/SurfaceFlingerWatchDog.h"
+#endif
 
 #define DISPLAY_COUNT       1
 
@@ -163,9 +180,6 @@ SurfaceFlinger::SurfaceFlinger()
     property_get("ro.bq.gpu_to_cpu_unsupported", value, "0");
     mGpuToCpuSupported = !atoi(value);
 
-    property_get("debug.sf.drop_missed_frames", value, "0");
-    mDropMissedFrames = atoi(value);
-
     property_get("debug.sf.showupdates", value, "0");
     mDebugRegion = atoi(value);
 
@@ -179,6 +193,10 @@ SurfaceFlinger::SurfaceFlinger()
     }
     ALOGI_IF(mDebugRegion, "showupdates enabled");
     ALOGI_IF(mDebugDDMS, "DDMS debugging enabled");
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    mBootAnimationEnabled = true;
+#endif
 }
 
 void SurfaceFlinger::onFirstRef()
@@ -188,6 +206,10 @@ void SurfaceFlinger::onFirstRef()
 
 SurfaceFlinger::~SurfaceFlinger()
 {
+#ifdef MTK_AOSP_ENHANCEMENT
+    // mHwc should be deleted to avoid memory leak
+    delete mHwc;
+#endif
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     eglTerminate(display);
@@ -304,6 +326,13 @@ void SurfaceFlinger::bootFinished()
     // formerly we would just kill the process, but we now ask it to exit so it
     // can choose where to stop the animation.
     property_set("service.bootanim.exit", "1");
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    // boot time profiling
+    ALOG(LOG_INFO,"boot","BOOTPROF:BootAnimation:End:%ld", long(ns2ms(systemTime())));
+    bootProf(0);
+    SFWatchDog::getInstance()->setThreshold(500);
+#endif
 }
 
 void SurfaceFlinger::deleteTextureAsync(uint32_t texture) {
@@ -324,8 +353,13 @@ void SurfaceFlinger::deleteTextureAsync(uint32_t texture) {
 
 class DispSyncSource : public VSyncSource, private DispSync::Callback {
 public:
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+    DispSyncSource(DispSync* dispSync, nsecs_t phaseOffset, bool traceVsync,
+        const char* label, bool delay = false) :
+#else
     DispSyncSource(DispSync* dispSync, nsecs_t phaseOffset, bool traceVsync,
         const char* label) :
+#endif
             mValue(0),
             mTraceVsync(traceVsync),
             mVsyncOnLabel(String8::format("VsyncOn-%s", label)),
@@ -335,7 +369,16 @@ public:
             mCallback(),
             mVsyncMutex(),
             mPhaseOffset(phaseOffset),
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+            mEnabled(false) {
+                mDispSync->registerEventListener(phaseOffset,
+                                                 static_cast<VSyncSource*>(this),
+                                                 static_cast<DispSync::Callback*>(this),
+                                                 delay);
+            }
+#else
             mEnabled(false) {}
+#endif
 
     virtual ~DispSyncSource() {}
 
@@ -410,7 +453,11 @@ private:
 
             if (mTraceVsync) {
                 mValue = (mValue + 1) % 2;
+#ifdef MTK_AOSP_ENHANCEMENT
+                ATRACE_INT_PERF(mVsyncEventLabel.string(), mValue);
+#else
                 ATRACE_INT(mVsyncEventLabel.string(), mValue);
+#endif
             }
         }
 
@@ -445,15 +492,6 @@ void SurfaceFlinger::init() {
     mEGLDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglInitialize(mEGLDisplay, NULL, NULL);
 
-    // start the EventThread
-    sp<VSyncSource> vsyncSrc = new DispSyncSource(&mPrimaryDispSync,
-            vsyncPhaseOffsetNs, true, "app");
-    mEventThread = new EventThread(vsyncSrc);
-    sp<VSyncSource> sfVsyncSrc = new DispSyncSource(&mPrimaryDispSync,
-            sfVsyncPhaseOffsetNs, true, "sf");
-    mSFEventThread = new EventThread(sfVsyncSrc);
-    mEventQueue.setEventThread(mSFEventThread);
-
     // Initialize the H/W composer object.  There may or may not be an
     // actual hardware composer underneath.
     mHwc = new HWComposer(this,
@@ -465,8 +503,22 @@ void SurfaceFlinger::init() {
     // retrieve the EGL context that was selected/created
     mEGLContext = mRenderEngine->getEGLContext();
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    // make sure 3D init success
+    if (mEGLContext == EGL_NO_CONTEXT)
+    {
+        ALOGE("FATAL: couldn't create EGLContext");
+        delete mHwc;
+        eglTerminate(mEGLDisplay);
+        exit(0);
+    }
+
+    // init properties setting first
+    setMTKProperties();
+#else
     LOG_ALWAYS_FATAL_IF(mEGLContext == EGL_NO_CONTEXT,
             "couldn't create EGLContext");
+#endif
 
     // initialize our non-virtual displays
     for (size_t i=0 ; i<DisplayDevice::NUM_BUILTIN_DISPLAY_TYPES ; i++) {
@@ -505,6 +557,46 @@ void SurfaceFlinger::init() {
     // (which may happens before we render something)
     getDefaultDisplayDevice()->makeCurrent(mEGLDisplay, mEGLContext);
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    mWatchDogIndex = SFWatchDog::getInstance()->registerNodeName("SurfaceFlinger");
+    sPropertiesState.mAppVSyncOffset = VSYNC_EVENT_PHASE_OFFSET_NS;
+    sPropertiesState.mSfVSyncOffset = SF_VSYNC_EVENT_PHASE_OFFSET_NS;
+
+    char vsyncOffsetProp[PROPERTY_VALUE_MAX];
+    if (property_get("debug.sf.appvsync", vsyncOffsetProp, NULL) > 0) {
+        sPropertiesState.mAppVSyncOffset = atoi(vsyncOffsetProp);
+    }
+    if (property_get("debug.sf.sfvsync", vsyncOffsetProp, NULL) > 0) {
+        sPropertiesState.mSfVSyncOffset = atoi(vsyncOffsetProp);
+    }
+
+#ifndef MTK_EMULATOR_SUPPORT
+    sp<Resync> resync = new Resync(this, HWC_DISPLAY_PRIMARY, sPropertiesState.mAppVSyncOffset);
+    mPrimaryDispSync.setResync(resync);
+#endif
+
+    // start the EventThread
+    sp<VSyncSource> vsyncSrc = new DispSyncSource(&mPrimaryDispSync,
+            sPropertiesState.mAppVSyncOffset, true, "app");
+    mEventThread = new EventThread(vsyncSrc);
+#ifndef MTK_EMULATOR_SUPPORT
+    sp<VSyncSource> sfVsyncSrc = new DispSyncSource(&mPrimaryDispSync,
+            sPropertiesState.mSfVSyncOffset, true, "sf", true);
+#else
+    sp<VSyncSource> sfVsyncSrc = new DispSyncSource(&mPrimaryDispSync,
+            sPropertiesState.mSfVSyncOffset, true, "sf");
+#endif
+#else
+    // start the EventThread
+    sp<VSyncSource> vsyncSrc = new DispSyncSource(&mPrimaryDispSync,
+            vsyncPhaseOffsetNs, true, "app");
+    mEventThread = new EventThread(vsyncSrc);
+    sp<VSyncSource> sfVsyncSrc = new DispSyncSource(&mPrimaryDispSync,
+            sfVsyncPhaseOffsetNs, true, "sf");
+#endif
+    mSFEventThread = new EventThread(sfVsyncSrc);
+    mEventQueue.setEventThread(mSFEventThread);
+
     mEventControlThread = new EventControlThread(this);
     mEventControlThread->run("EventControl", PRIORITY_URGENT_DISPLAY);
 
@@ -529,9 +621,14 @@ int32_t SurfaceFlinger::allocateHwcDisplayId(DisplayDevice::DisplayType type) {
 }
 
 void SurfaceFlinger::startBootAnim() {
+#ifdef MTK_AOSP_ENHANCEMENT
+    // dynamic disable/enable boot animation
+    checkEnableBootAnim();
+#else
     // start boot animation
     property_set("service.bootanim.exit", "0");
     property_set("ctl.start", "bootanim");
+#endif
 }
 
 size_t SurfaceFlinger::getMaxTextureSize() const {
@@ -571,6 +668,11 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
     if (type < 0) {
         return type;
     }
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    // TODO: should it be placed at a better place
+    const HWComposer& hwc(getHwComposer());
+#endif // MTK_AOSP_ENHANCEMENT
 
     // TODO: Not sure if display density should handled by SF any longer
     class Density {
@@ -619,6 +721,12 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
             // TODO: this needs to go away (currently needed only by webkit)
             sp<const DisplayDevice> hw(getDefaultDisplayDevice());
             info.orientation = hw->getOrientation();
+#ifdef MTK_AOSP_ENHANCEMENT
+        } else if (HWC_DISPLAY_SMARTBOOK == hwc.getSubType(type)) {
+            static const int SMB_DENSITY = 160;
+            info.density = SMB_DENSITY / 160.0f;
+            info.orientation = 0;
+#endif
         } else {
             // TODO: where should this value come from?
             static const int TV_DENSITY = 213;
@@ -632,7 +740,6 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
         info.ydpi = ydpi;
         info.fps = float(1e9 / hwConfig.refresh);
         info.appVsyncOffset = VSYNC_EVENT_PHASE_OFFSET_NS;
-        info.colorTransform = hwConfig.colorTransform;
 
         // This is how far in advance a buffer must be queued for
         // presentation at a given time.  If you want a buffer to appear
@@ -651,6 +758,12 @@ status_t SurfaceFlinger::getDisplayConfigs(const sp<IBinder>& display,
 
         // All non-virtual displays are currently considered secure.
         info.secure = true;
+#ifdef MTK_AOSP_ENHANCEMENT
+        // correct for primary display to normalize graphic plane
+        if (DisplayDevice::DISPLAY_PRIMARY == type) {
+            getDefaultDisplayDevice()->correctSizeByHwOrientation(info.w, info.h);
+        }
+#endif
 
         configs->push_back(info);
     }
@@ -668,6 +781,9 @@ status_t SurfaceFlinger::getDisplayStats(const sp<IBinder>& /* display */,
     memset(stats, 0, sizeof(*stats));
     stats->vsyncTime   = mPrimaryDispSync.computeNextRefresh(0);
     stats->vsyncPeriod = mPrimaryDispSync.getPeriod();
+#ifdef MTK_AOSP_ENHANCEMENT
+    stats->vsyncSFTime = stats->vsyncTime + sfVsyncPhaseOffsetNs;
+#endif
     return NO_ERROR;
 }
 
@@ -882,7 +998,14 @@ void SurfaceFlinger::eventControl(int disp, int event, int enabled) {
 }
 
 void SurfaceFlinger::onMessageReceived(int32_t what) {
+#ifdef MTK_AOSP_ENHANCEMENT
+    ATRACE_CALL_PERF();
+    // start watchdog
+    sp<SFWatchDog> watchDog(SFWatchDog::getInstance());
+    watchDog->markStartTransactionTime(mWatchDogIndex);
+#else
     ATRACE_CALL();
+#endif
     switch (what) {
         case MessageQueue::TRANSACTION: {
             handleMessageTransaction();
@@ -905,6 +1028,10 @@ void SurfaceFlinger::onMessageReceived(int32_t what) {
             break;
         }
     }
+#ifdef MTK_AOSP_ENHANCEMENT
+    // stop watchdog
+    watchDog->unmarkStartTransactionTime(mWatchDogIndex);
+#endif
 }
 
 bool SurfaceFlinger::handleMessageTransaction() {
@@ -918,36 +1045,23 @@ bool SurfaceFlinger::handleMessageTransaction() {
 
 bool SurfaceFlinger::handleMessageInvalidate() {
     ATRACE_CALL();
+#ifdef MTK_AOSP_ENHANCEMENT
+    Mutex::Autolock _l(mDumpLock);
+#endif
     return handlePageFlip();
 }
 
 void SurfaceFlinger::handleMessageRefresh() {
     ATRACE_CALL();
-
-    static nsecs_t previousExpectedPresent = 0;
-    nsecs_t expectedPresent = mPrimaryDispSync.computeNextRefresh(0);
-    static bool previousFrameMissed = false;
-    bool frameMissed = (expectedPresent == previousExpectedPresent);
-    if (frameMissed != previousFrameMissed) {
-        ATRACE_INT("FrameMissed", static_cast<int>(frameMissed));
-    }
-    previousFrameMissed = frameMissed;
-
-    if (CC_UNLIKELY(mDropMissedFrames && frameMissed)) {
-        // Latch buffers, but don't send anything to HWC, then signal another
-        // wakeup for the next vsync
-        preComposition();
-        repaintEverything();
-    } else {
-        preComposition();
-        rebuildLayerStacks();
-        setUpHWComposer();
-        doDebugFlashRegions();
-        doComposition();
-        postComposition();
-    }
-
-    previousExpectedPresent = mPrimaryDispSync.computeNextRefresh(0);
+#ifdef MTK_AOSP_ENHANCEMENT
+    Mutex::Autolock _l(mDumpLock);
+#endif
+    preComposition();
+    rebuildLayerStacks();
+    setUpHWComposer();
+    doDebugFlashRegions();
+    doComposition();
+    postComposition();
 }
 
 void SurfaceFlinger::doDebugFlashRegions()
@@ -1135,6 +1249,12 @@ void SurfaceFlinger::setUpHWComposer() {
         if (mustRecompose) {
             mDisplays[dpy]->lastCompositionHadVisibleLayers = !empty;
         }
+#ifdef MTK_AOSP_ENHANCEMENT
+        else {
+           HWComposer& hwc(getHwComposer());
+           hwc.skipDisplay(mDisplays[dpy]->getHwcDisplayId());
+        }
+#endif
     }
 
     HWComposer& hwc(getHwComposer());
@@ -1169,6 +1289,9 @@ void SurfaceFlinger::setUpHWComposer() {
             sp<const DisplayDevice> hw(mDisplays[dpy]);
             const int32_t id = hw->getHwcDisplayId();
             if (id >= 0) {
+#ifdef MTK_AOSP_ENHANCEMENT
+                hwc.setDisplayOrientation(id, hw->getOrientationTransform());
+#endif
                 const Vector< sp<Layer> >& currentLayers(
                     hw->getVisibleLayersSortedByZ());
                 const size_t count = currentLayers.size();
@@ -1216,6 +1339,14 @@ void SurfaceFlinger::setUpHWComposer() {
 }
 
 void SurfaceFlinger::doComposition() {
+#ifdef MTK_AOSP_ENHANCEMENT
+    // to slow down FPS
+    if (CC_UNLIKELY(0 != sPropertiesState.mDelayTime)) {
+        ALOGI("SurfaceFlinger slow motion timer: %d ms",
+              sPropertiesState.mDelayTime);
+        usleep(1000 * sPropertiesState.mDelayTime);
+    }
+#endif
     ATRACE_CALL();
     const bool repaintEverything = android_atomic_and(0, &mRepaintEverything);
     for (size_t dpy=0 ; dpy<mDisplays.size() ; dpy++) {
@@ -1223,6 +1354,12 @@ void SurfaceFlinger::doComposition() {
         if (hw->isDisplayOn()) {
             // transform the dirty region into this screen's coordinate space
             const Region dirtyRegion(hw->getDirtyRegion(repaintEverything));
+
+#ifdef MTK_AOSP_ENHANCEMENT
+            char tag[32];
+            snprintf(tag, sizeof(tag), "doDisplayComposition_%d", hw->getHwcDisplayId());
+            ATRACE_NAME(tag);
+#endif
 
             // repaint the framebuffer (if needed)
             doDisplayComposition(hw, dirtyRegion);
@@ -1862,6 +1999,20 @@ void SurfaceFlinger::doDisplayComposition(const sp<const DisplayDevice>& hw,
         return;
     }
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    if (CC_UNLIKELY(
+            (hw->getPageFlipCount() < 1) &&
+            (hw->getDisplayType() == DisplayDevice::DISPLAY_PRIMARY))) {
+        return;
+    }
+
+    // doDisplayComposition debug msg
+    if (CC_UNLIKELY(sPropertiesState.mLogRepaint)) {
+        ALOGD("[doDisplayComposition] (type:%d hwcid:%d name:%s) +",
+            hw->getDisplayType(), hw->getHwcDisplayId(), hw->getDisplayName().string());
+    }
+#endif
+
     Region dirtyRegion(inDirtyRegion);
 
     // compute the invalid region
@@ -1905,6 +2056,13 @@ void SurfaceFlinger::doDisplayComposition(const sp<const DisplayDevice>& hw,
 
     // swap buffers (presentation)
     hw->swapBuffers(getHwComposer());
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    // doDisplayComposition debug msg
+    if (CC_UNLIKELY(sPropertiesState.mLogRepaint)) {
+        ALOGD("[doDisplayComposition] -");
+    }
+#endif
 }
 
 bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const Region& dirty)
@@ -1955,6 +2113,14 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
             if (!region.isEmpty()) {
                 // can happen with SurfaceView
                 drawWormhole(hw, region);
+#ifdef MTK_AOSP_ENHANCEMENT
+                // debug log
+                if (CC_UNLIKELY(sPropertiesState.mLogRepaint)) {
+                    String8 str;
+                    region.dump(str, "");
+                    ALOGD("@ (wormhole)\n%s", str.string());
+                }
+#endif
             }
         }
 
@@ -2001,11 +2167,29 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
                             // never clear the very first layer since we're
                             // guaranteed the FB is already cleared
                             layer->clearWithOpenGL(hw, clip);
+#ifdef MTK_AOSP_ENHANCEMENT
+                            // debug log
+                            if (CC_UNLIKELY(sPropertiesState.mLogRepaint)) {
+                                String8 str;
+                                clip.dump(str, "");
+                                ALOGD("hwc (%s\n%s)",
+                                      layer->getName().string(), str.string());
+                            }
+#endif
                         }
                         break;
                     }
                     case HWC_FRAMEBUFFER: {
                         layer->draw(hw, clip);
+#ifdef MTK_AOSP_ENHANCEMENT
+                        // debug log
+                        if (CC_UNLIKELY(sPropertiesState.mLogRepaint)) {
+                            String8 str;
+                            clip.dump(str, "");
+                            ALOGD("gles (%s\n%s)",
+                                  layer->getName().string(), str.string());
+                        }
+#endif
                         break;
                     }
                     case HWC_FRAMEBUFFER_TARGET: {
@@ -2026,6 +2210,14 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
                     tr.transform(layer->visibleRegion)));
             if (!clip.isEmpty()) {
                 layer->draw(hw, clip);
+#ifdef MTK_AOSP_ENHANCEMENT
+                // debug log
+                if (CC_UNLIKELY(sPropertiesState.mLogRepaint)) {
+                    String8 str;
+                    clip.dump(str, "");
+                    ALOGD("gles (%s\n%s)", layer->getName().string(), str.string());
+                }
+#endif
             }
         }
     }
@@ -2038,6 +2230,12 @@ bool SurfaceFlinger::doComposeSurfaces(const sp<const DisplayDevice>& hw, const 
 void SurfaceFlinger::drawWormhole(const sp<const DisplayDevice>& hw, const Region& region) const {
     const int32_t height = hw->getHeight();
     RenderEngine& engine(getRenderEngine());
+#ifdef MTK_AOSP_ENHANCEMENT
+    // set special color instead black for wormhole debug
+    if (CC_UNLIKELY(sPropertiesState.mLineG3D))
+        engine.fillRegionWithColor(region, height, 1, 0, 1, 1);
+    else
+#endif
     engine.fillRegionWithColor(region, height, 0, 0, 0, 0);
 }
 
@@ -2436,6 +2634,11 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& hw,
     int32_t type = hw->getDisplayType();
     int currentMode = hw->getPowerMode();
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    // tracking screen blank/unblank
+    ATRACE_CALL();
+#endif
+
     if (mode == currentMode) {
         ALOGD("Screen type=%d is already mode=%d", hw->getDisplayType(), mode);
         return;
@@ -2453,17 +2656,30 @@ void SurfaceFlinger::setPowerModeInternal(const sp<DisplayDevice>& hw,
             // FIXME: eventthread only knows about the main display right now
             mEventThread->onScreenAcquired();
             resyncToHardwareVsync(true);
+#ifdef MTK_AOSP_ENHANCEMENT
+            SFWatchDog::getInstance()->screenAcquired();
+#endif
         }
 
         mVisibleRegionsDirty = true;
         mHasPoweredOff = true;
+#ifdef MTK_AOSP_ENHANCEMENT
+        // do not refresh screen when acquired while booting
+        if (true == mBootFinished) {
+            repaintEverything();
+        }
+#else
         repaintEverything();
+#endif
     } else if (mode == HWC_POWER_MODE_OFF) {
         if (type == DisplayDevice::DISPLAY_PRIMARY) {
             disableHardwareVsync(true); // also cancels any in-progress resync
 
             // FIXME: eventthread only knows about the main display right now
             mEventThread->onScreenReleased();
+#ifdef MTK_AOSP_ENHANCEMENT
+            SFWatchDog::getInstance()->screenReleased();
+#endif
         }
 
         getHwComposer().setPowerMode(type, mode);
@@ -2499,6 +2715,13 @@ void SurfaceFlinger::setPowerMode(const sp<IBinder>& display, int mode) {
     };
     sp<MessageBase> msg = new MessageSetPowerMode(*this, display, mode);
     postMessageSync(msg);
+#ifdef MTK_AOSP_ENHANCEMENT
+    // notify IPO for black screen sync issue
+    if (mode != HWC_POWER_MODE_OFF) {
+        usleep(16667);
+        property_set("sys.ipowin.done", "1");
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -2564,10 +2787,34 @@ status_t SurfaceFlinger::dump(int fd, const Vector<String16>& args)
                 dumpStaticScreenStats(result);
                 dumpAll = false;
             }
+
+#ifdef MTK_AOSP_ENHANCEMENT
+            if ((index < numArgs) &&
+                    (args[index] == String16("--mtk"))) {
+                index++;
+                clearStatsLocked(args, index, result);
+                // for run-time enable property
+                setMTKProperties(result);
+                dumpAll = false;
+            }
+#endif
         }
 
         if (dumpAll) {
+#ifdef MTK_AOSP_ENHANCEMENT
+            err = mDumpLock.timedLock(s2ns(1));
+            bool dumpLocked = (err == NO_ERROR);
+            if (!dumpLocked) {
+                result.appendFormat(
+                        "SurfaceFlinger appears to be unresponsive (%s [%d]), "
+                        "failed to dump\n", strerror(-err), err);
+            } else {
+                dumpAllLocked(args, index, result);
+                mDumpLock.unlock();
+            }
+#else
             dumpAllLocked(args, index, result);
+#endif
         }
 
         if (locked) {
@@ -3027,6 +3274,19 @@ status_t SurfaceFlinger::onTransact(
                 n = data.readInt32();
                 mSFEventThread->setPhaseOffset(static_cast<nsecs_t>(n));
                 return NO_ERROR;
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+            case 10001: {
+                n = data.readInt32();
+
+                mPrimaryDispSync.adjustVsyncPeriod(n);
+                return NO_ERROR;
+            }
+            case 10002: {
+                n = data.readInt32();
+                mPrimaryDispSync.adjustVsyncOffset(static_cast<nsecs_t>(n));
+                return NO_ERROR;
+            }
+#endif
             }
         }
     }
@@ -3133,6 +3393,9 @@ public:
 
     // Binder thread
     status_t waitForResponse() {
+#ifdef MTK_AOSP_ENHANCEMENT
+        ATRACE_CALL_PERF();
+#endif
         do {
             looper->pollOnce(-1);
         } while (!exitRequested);
@@ -3156,6 +3419,9 @@ status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display,
         Rect sourceCrop, uint32_t reqWidth, uint32_t reqHeight,
         uint32_t minLayerZ, uint32_t maxLayerZ,
         bool useIdentityTransform, ISurfaceComposer::Rotation rotation) {
+#ifdef MTK_AOSP_ENHANCEMENT
+    ATRACE_CALL_PERF();
+#endif
 
     if (CC_UNLIKELY(display == 0))
         return BAD_VALUE;
@@ -3227,10 +3493,28 @@ status_t SurfaceFlinger::captureScreen(const sp<IBinder>& display,
         virtual bool handler() {
             Mutex::Autolock _l(flinger->mStateLock);
             sp<const DisplayDevice> hw(flinger->getDisplayDevice(display));
+#ifdef MTK_AOSP_ENHANCEMENT
+            int usage = 0;
+            producer->query(NATIVE_WINDOW_CONSUMER_USAGE_BITS, &usage);
+            if (usage & GRALLOC_USAGE_HW_COMPOSER) {
+                // to resolve the side effects when suffering from performance,
+                // make captureScreen() be an aysnchronous function call
+                static_cast<GraphicProducerWrapper*>(producer->asBinder(producer).get())->exit(NO_ERROR);
+                result = flinger->captureScreenImplLocked(hw, producer,
+                    sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
+                    useIdentityTransform, rotation);
+            } else {
+                result = flinger->captureScreenImplLocked(hw, producer,
+                        sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
+                        useIdentityTransform, rotation);
+                static_cast<GraphicProducerWrapper*>(producer->asBinder(producer).get())->exit(result);
+            }
+#else
             result = flinger->captureScreenImplLocked(hw, producer,
                     sourceCrop, reqWidth, reqHeight, minLayerZ, maxLayerZ,
                     useIdentityTransform, rotation);
             static_cast<GraphicProducerWrapper*>(IInterface::asBinder(producer).get())->exit(result);
+#endif
             return true;
         }
     };
@@ -3283,6 +3567,11 @@ void SurfaceFlinger::renderScreenImplLocked(
         sourceCrop.setLeftTop(Point(0, 0));
         sourceCrop.setRightBottom(Point(hw_w, hw_h));
     }
+#ifdef MTK_AOSP_ENHANCEMENT
+    else {
+        hw->correctCropByHwOrientation(sourceCrop);
+    }
+#endif
 
     // ensure that sourceCrop is inside screen
     if (sourceCrop.left < 0) {
@@ -3300,6 +3589,9 @@ void SurfaceFlinger::renderScreenImplLocked(
 
     // make sure to clear all GL error flags
     engine.checkErrors();
+#ifdef MTK_AOSP_ENHANCEMENT
+    hw->correctRotationByHwOrientation(rotation);
+#endif
 
     // set-up our viewport
     engine.setViewportAndProjection(
@@ -3325,6 +3617,24 @@ void SurfaceFlinger::renderScreenImplLocked(
         }
     }
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    // log info of screenshot making of
+    if (CC_UNLIKELY(sPropertiesState.mDumpScreenShot > 0)) {
+        String8 s;
+        for (size_t i = 0; i < count; i++) {
+            const sp<Layer>& layer(layers[i]);
+            const Layer::State& state(layer->getDrawingState());
+            s.appendFormat("    * name=%s, layerStack=%d, z=%d, visible=%d, flags=%x, alpha=%x\n",
+                    layer->getName().string(), state.layerStack, state.z, layer->isVisible(), state.flags, state.alpha);
+        }
+        ALOGI("[renderScreenImplLocked] count=%d, minLayerZ=%u, maxLayerZ=%u +\n%s[renderScreenImplLocked] -",
+                sPropertiesState.mDumpScreenShot, minLayerZ, maxLayerZ, s.string());
+
+        // debug line that indicates drawing screenshot
+        if (CC_UNLIKELY(sPropertiesState.mLineSS))
+            engine.drawDebugLine(hw, 0xFFFFFF00);
+    }
+#endif
     // compositionComplete is needed for older driver
     hw->compositionComplete();
     hw->setViewportAndProjection();
@@ -3343,6 +3653,9 @@ status_t SurfaceFlinger::captureScreenImplLocked(
     // get screen geometry
     uint32_t hw_w = hw->getWidth();
     uint32_t hw_h = hw->getHeight();
+#ifdef MTK_AOSP_ENHANCEMENT
+    hw->correctSizeByHwOrientation(hw_w, hw_h);
+#endif
 
     if (rotation & Transform::ROT_90) {
         std::swap(hw_w, hw_h);
@@ -3452,6 +3765,18 @@ status_t SurfaceFlinger::captureScreenImplLocked(
                 } else {
                     result = BAD_VALUE;
                 }
+#ifdef MTK_AOSP_ENHANCEMENT
+                // dump screenshot by SF into file
+                if (CC_UNLIKELY(sPropertiesState.mDumpScreenShot > 0)) {
+                    String8 s = String8::format("captureScreen_%08d", sPropertiesState.mDumpScreenShot);
+                    if (-1 != syncFd) {
+                        sp<Fence> fence(new Fence(dup(syncFd)));
+                        fence->waitForever(s.string());
+                    }
+                    getGraphicBufferUtil().dump(buffer->handle, s.string(), "/data/SF_dump");
+                    sPropertiesState.mDumpScreenShot++;
+                }
+#endif
                 // queueBuffer takes ownership of syncFd
                 result = window->queueBuffer(window, buffer, syncFd);
             }

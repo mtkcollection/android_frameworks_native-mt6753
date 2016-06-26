@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2013 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,10 @@
 #include "DispSync.h"
 #include "EventLog/EventLog.h"
 
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+#include "mediatek/Resync.h"
+#endif
+
 namespace android {
 
 // Setting this to true enables verbose tracing that can be used to debug
@@ -57,6 +66,9 @@ public:
             mPeriod(0),
             mPhase(0),
             mWakeupLatency(0) {
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+        mResync = NULL;
+#endif
     }
 
     virtual ~DispSyncThread() {}
@@ -65,6 +77,9 @@ public:
         Mutex::Autolock lock(mMutex);
         mPeriod = period;
         mPhase = phase;
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+        if (mResync != NULL) mResync->updateModelLocked(mPeriod, mPhase);
+#endif
         mCond.signal();
     }
 
@@ -137,7 +152,15 @@ public:
             }
 
             if (callbackInvocations.size() > 0) {
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+                if (mResync != NULL) {
+                    mResync->fireCallbackInvocations((void*)&callbackInvocations);
+                } else {
+                    fireCallbackInvocations(callbackInvocations);
+                }
+#else
                 fireCallbackInvocations(callbackInvocations);
+#endif
             }
         }
 
@@ -162,7 +185,15 @@ public:
         // computeListenerNextEventTimeLocked filters out events within a half
         // a period of the last event time, we need to initialize the last
         // event time to a half a period in the past.
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+        if (mResync != NULL) {
+            mResync->addEventListener((void*)&listener);
+        } else {
+            listener.mLastEventTime = systemTime(SYSTEM_TIME_MONOTONIC) - mPeriod / 2;
+        }
+#else
         listener.mLastEventTime = systemTime(SYSTEM_TIME_MONOTONIC) - mPeriod / 2;
+#endif
 
         mEventListeners.push(listener);
 
@@ -176,6 +207,9 @@ public:
 
         for (size_t i = 0; i < mEventListeners.size(); i++) {
             if (mEventListeners[i].mCallback == callback) {
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+                if (mResync != NULL) mResync->removeEventListener((void*)&mEventListeners[i]);
+#endif
                 mEventListeners.removeAt(i);
                 mCond.signal();
                 return NO_ERROR;
@@ -241,6 +275,14 @@ private:
     nsecs_t computeListenerNextEventTimeLocked(const EventListener& listener,
             nsecs_t ref) {
 
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+        if (mResync != NULL) {
+            nsecs_t t = mResync->computeNextEventTimeLocked(
+                            listener.mPhase, listener.mLastEventTime, ref);
+            return t;
+        }
+#endif
+
         nsecs_t lastEventTime = listener.mLastEventTime;
         if (ref < lastEventTime) {
             ref = lastEventTime;
@@ -272,6 +314,54 @@ private:
 
     Mutex mMutex;
     Condition mCond;
+
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+    sp<Resync> mResync;
+
+public:
+    void setResync(sp<Resync> resync, int num) {
+        Mutex::Autolock lock(mMutex);
+        mResync = resync;
+        if (mResync != NULL) mResync->setSyncSampleNumLocked(num);
+    }
+
+    void updateSyncTime(int num, nsecs_t sync) {
+        Mutex::Autolock lock(mMutex);
+        if (mResync != NULL) mResync->updateSyncTimeLocked(num, sync);
+    }
+
+    nsecs_t queryPeriod() {
+        Mutex::Autolock lock(mMutex);
+        if (mResync != NULL) return mResync->queryPeriodLocked();
+        return 0;
+    }
+
+    status_t registerEventListener(nsecs_t offset, VSyncSource* vss, DispSync::Callback* cb, bool delay) {
+        Mutex::Autolock lock(mMutex);
+        if (mResync != NULL) return mResync->registerEventListener(offset, vss, cb, delay);
+        return NO_ERROR;
+    }
+
+    status_t adjustVsyncPeriod(int32_t fps) {
+        if (mResync != NULL) return mResync->adjustVsyncPeriod(fps);
+        return NO_ERROR;
+    }
+
+    status_t adjustVsyncOffset(nsecs_t offset) {
+        status_t res = NO_ERROR;
+        if (mResync != NULL) {
+            res = mResync->adjustVsyncOffset(offset);
+            mCond.signal();
+        }
+        return res;
+    }
+
+    void dump(String8& result) {
+        if (mResync != NULL) {
+            mResync->dump(result);
+        }
+    }
+#endif
 };
 
 class ZeroPhaseTracer : public DispSync::Callback {
@@ -361,6 +451,10 @@ bool DispSync::addResyncSample(nsecs_t timestamp) {
         mFirstResyncSample = (mFirstResyncSample + 1) % MAX_RESYNC_SAMPLES;
     }
 
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+    mThread->updateSyncTime(mNumResyncSamples, timestamp);
+#endif
+
     updateModelLocked();
 
     if (mNumResyncSamplesSincePresent++ > MAX_RESYNC_SAMPLES_WITHOUT_PRESENT) {
@@ -385,6 +479,11 @@ void DispSync::endResync() {
 status_t DispSync::addEventListener(nsecs_t phase,
         const sp<Callback>& callback) {
 
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+    nsecs_t period = mThread->queryPeriod();
+    if (period > 0) setPeriod(period);
+#endif
+
     Mutex::Autolock lock(mMutex);
     return mThread->addEventListener(phase, callback);
 }
@@ -405,6 +504,12 @@ void DispSync::setPeriod(nsecs_t period) {
     Mutex::Autolock lock(mMutex);
     mPeriod = period;
     mPhase = 0;
+#ifdef MTK_AOSP_ENHANCEMENT
+    if (kTraceDetailedInfo) {
+        ATRACE_INT64("DispSync:Period", mPeriod);
+        ATRACE_INT64("DispSync:Phase", mPhase);
+    }
+#endif
     mThread->updateModel(mPeriod, mPhase);
 }
 
@@ -414,8 +519,18 @@ nsecs_t DispSync::getPeriod() {
     return mPeriod;
 }
 
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+void DispSync::setResync(sp<Resync> resync) {
+    Mutex::Autolock lock(mMutex);
+    mThread->setResync(resync, MIN_RESYNC_SAMPLES_FOR_UPDATE);
+}
+#endif
+
 void DispSync::updateModelLocked() {
     if (mNumResyncSamples >= MIN_RESYNC_SAMPLES_FOR_UPDATE) {
+#ifdef MTK_AOSP_ENHANCEMENT
+        ATRACE_INT("VSYNC_CALIBRATION", 1);
+#endif
         nsecs_t durationSum = 0;
         for (size_t i = 1; i < mNumResyncSamples; i++) {
             size_t idx = (mFirstResyncSample + i) % MAX_RESYNC_SAMPLES;
@@ -455,6 +570,11 @@ void DispSync::updateModelLocked() {
 
         mThread->updateModel(mPeriod, mPhase);
     }
+#ifdef MTK_AOSP_ENHANCEMENT
+    else {
+        ATRACE_INT("VSYNC_CALIBRATION", 0);
+    }
+#endif
 }
 
 void DispSync::updateErrorLocked() {
@@ -560,6 +680,26 @@ void DispSync::dump(String8& result) const {
     }
 
     result.appendFormat("current monotonic time: %" PRId64 "\n", now);
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+    mThread->dump(result);
+#endif
 }
+
+#if defined(MTK_AOSP_ENHANCEMENT) && !defined(MTK_EMULATOR_SUPPORT)
+status_t DispSync::registerEventListener(nsecs_t offset, VSyncSource* vss, DispSync::Callback* cb, bool delay)
+{
+    return mThread->registerEventListener(offset, vss, cb, delay);
+}
+
+status_t DispSync::adjustVsyncPeriod(int32_t fps)
+{
+    return mThread->adjustVsyncPeriod(fps);
+}
+
+status_t DispSync::adjustVsyncOffset(nsecs_t offset)
+{
+    return mThread->adjustVsyncOffset(offset);
+}
+#endif
 
 } // namespace android

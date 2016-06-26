@@ -332,73 +332,31 @@ status_t KeyCharacterMap::mapKey(int32_t scanCode, int32_t usageCode, int32_t* o
     if (usageCode) {
         ssize_t index = mKeysByUsageCode.indexOfKey(usageCode);
         if (index >= 0) {
-            *outKeyCode = mKeysByUsageCode.valueAt(index);
 #if DEBUG_MAPPING
-            ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d.",
-                    scanCode, usageCode, *outKeyCode);
+    ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d.",
+            scanCode, usageCode, *outKeyCode);
 #endif
+            *outKeyCode = mKeysByUsageCode.valueAt(index);
             return OK;
         }
     }
     if (scanCode) {
         ssize_t index = mKeysByScanCode.indexOfKey(scanCode);
         if (index >= 0) {
-            *outKeyCode = mKeysByScanCode.valueAt(index);
 #if DEBUG_MAPPING
-            ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d.",
-                    scanCode, usageCode, *outKeyCode);
+    ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Result keyCode=%d.",
+            scanCode, usageCode, *outKeyCode);
 #endif
+            *outKeyCode = mKeysByScanCode.valueAt(index);
             return OK;
         }
     }
 
 #if DEBUG_MAPPING
-    ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Failed.", scanCode, usageCode);
+        ALOGD("mapKey: scanCode=%d, usageCode=0x%08x ~ Failed.", scanCode, usageCode);
 #endif
     *outKeyCode = AKEYCODE_UNKNOWN;
     return NAME_NOT_FOUND;
-}
-
-void KeyCharacterMap::tryRemapKey(int32_t keyCode, int32_t metaState,
-                                  int32_t *outKeyCode, int32_t *outMetaState) const {
-    *outKeyCode = keyCode;
-    *outMetaState = metaState;
-
-    const Key* key;
-    const Behavior* behavior;
-    if (getKeyBehavior(keyCode, metaState, &key, &behavior)) {
-        if (behavior->replacementKeyCode) {
-            *outKeyCode = behavior->replacementKeyCode;
-            int32_t newMetaState = metaState & ~behavior->metaState;
-            // Reset dependent meta states.
-            if (behavior->metaState & AMETA_ALT_ON) {
-                newMetaState &= ~(AMETA_ALT_LEFT_ON | AMETA_ALT_RIGHT_ON);
-            }
-            if (behavior->metaState & (AMETA_ALT_LEFT_ON | AMETA_ALT_RIGHT_ON)) {
-                newMetaState &= ~AMETA_ALT_ON;
-            }
-            if (behavior->metaState & AMETA_CTRL_ON) {
-                newMetaState &= ~(AMETA_CTRL_LEFT_ON | AMETA_CTRL_RIGHT_ON);
-            }
-            if (behavior->metaState & (AMETA_CTRL_LEFT_ON | AMETA_CTRL_RIGHT_ON)) {
-                newMetaState &= ~AMETA_CTRL_ON;
-            }
-            if (behavior->metaState & AMETA_SHIFT_ON) {
-                newMetaState &= ~(AMETA_SHIFT_LEFT_ON | AMETA_SHIFT_RIGHT_ON);
-            }
-            if (behavior->metaState & (AMETA_SHIFT_LEFT_ON | AMETA_SHIFT_RIGHT_ON)) {
-                newMetaState &= ~AMETA_SHIFT_ON;
-            }
-            // ... and put universal bits back if needed
-            *outMetaState = normalizeMetaState(newMetaState);
-        }
-    }
-
-#if DEBUG_MAPPING
-    ALOGD("tryRemapKey: keyCode=%d, metaState=0x%08x ~ "
-            "replacement keyCode=%d, replacement metaState=0x%08x.",
-            keyCode, metaState, *outKeyCode, *outMetaState);
-#endif
 }
 
 bool KeyCharacterMap::getKey(int32_t keyCode, const Key** outKey) const {
@@ -626,7 +584,6 @@ sp<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel) {
             int32_t metaState = parcel->readInt32();
             char16_t character = parcel->readInt32();
             int32_t fallbackKeyCode = parcel->readInt32();
-            int32_t replacementKeyCode = parcel->readInt32();
             if (parcel->errorCheck()) {
                 return NULL;
             }
@@ -635,7 +592,6 @@ sp<KeyCharacterMap> KeyCharacterMap::readFromParcel(Parcel* parcel) {
             behavior->metaState = metaState;
             behavior->character = character;
             behavior->fallbackKeyCode = fallbackKeyCode;
-            behavior->replacementKeyCode = replacementKeyCode;
             if (lastBehavior) {
                 lastBehavior->next = behavior;
             } else {
@@ -668,7 +624,6 @@ void KeyCharacterMap::writeToParcel(Parcel* parcel) const {
             parcel->writeInt32(behavior->metaState);
             parcel->writeInt32(behavior->character);
             parcel->writeInt32(behavior->fallbackKeyCode);
-            parcel->writeInt32(behavior->replacementKeyCode);
         }
         parcel->writeInt32(0);
     }
@@ -700,14 +655,13 @@ KeyCharacterMap::Key::~Key() {
 // --- KeyCharacterMap::Behavior ---
 
 KeyCharacterMap::Behavior::Behavior() :
-        next(NULL), metaState(0), character(0), fallbackKeyCode(0), replacementKeyCode(0) {
+        next(NULL), metaState(0), character(0), fallbackKeyCode(0) {
 }
 
 KeyCharacterMap::Behavior::Behavior(const Behavior& other) :
         next(other.next ? new Behavior(*other.next) : NULL),
         metaState(other.metaState), character(other.character),
-        fallbackKeyCode(other.fallbackKeyCode),
-        replacementKeyCode(other.replacementKeyCode) {
+        fallbackKeyCode(other.fallbackKeyCode) {
 }
 
 
@@ -969,7 +923,6 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
     Behavior behavior;
     bool haveCharacter = false;
     bool haveFallback = false;
-    bool haveReplacement = false;
 
     do {
         char ch = mTokenizer->peekChar();
@@ -986,11 +939,6 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
                         mTokenizer->getLocation().string());
                 return BAD_VALUE;
             }
-            if (haveReplacement) {
-                ALOGE("%s: Cannot combine character literal with replace action.",
-                        mTokenizer->getLocation().string());
-                return BAD_VALUE;
-            }
             behavior.character = character;
             haveCharacter = true;
         } else {
@@ -998,11 +946,6 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
             if (token == "none") {
                 if (haveCharacter) {
                     ALOGE("%s: Cannot combine multiple character literals or 'none'.",
-                            mTokenizer->getLocation().string());
-                    return BAD_VALUE;
-                }
-                if (haveReplacement) {
-                    ALOGE("%s: Cannot combine 'none' with replace action.",
                             mTokenizer->getLocation().string());
                     return BAD_VALUE;
                 }
@@ -1017,36 +960,13 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
                             token.string());
                     return BAD_VALUE;
                 }
-                if (haveFallback || haveReplacement) {
-                    ALOGE("%s: Cannot combine multiple fallback/replacement key codes.",
+                if (haveFallback) {
+                    ALOGE("%s: Cannot combine multiple fallback key codes.",
                             mTokenizer->getLocation().string());
                     return BAD_VALUE;
                 }
                 behavior.fallbackKeyCode = keyCode;
                 haveFallback = true;
-            } else if (token == "replace") {
-                mTokenizer->skipDelimiters(WHITESPACE);
-                token = mTokenizer->nextToken(WHITESPACE);
-                int32_t keyCode = getKeyCodeByLabel(token.string());
-                if (!keyCode) {
-                    ALOGE("%s: Invalid key code label for replace, got '%s'.",
-                            mTokenizer->getLocation().string(),
-                            token.string());
-                    return BAD_VALUE;
-                }
-                if (haveCharacter) {
-                    ALOGE("%s: Cannot combine character literal with replace action.",
-                            mTokenizer->getLocation().string());
-                    return BAD_VALUE;
-                }
-                if (haveFallback || haveReplacement) {
-                    ALOGE("%s: Cannot combine multiple fallback/replacement key codes.",
-                            mTokenizer->getLocation().string());
-                    return BAD_VALUE;
-                }
-                behavior.replacementKeyCode = keyCode;
-                haveReplacement = true;
-
             } else {
                 ALOGE("%s: Expected a key behavior after ':'.",
                         mTokenizer->getLocation().string());
@@ -1096,10 +1016,8 @@ status_t KeyCharacterMap::Parser::parseKeyProperty() {
             newBehavior->next = key->firstBehavior;
             key->firstBehavior = newBehavior;
 #if DEBUG_PARSER
-            ALOGD("Parsed key meta: keyCode=%d, meta=0x%x, char=%d, fallback=%d replace=%d.",
-                    mKeyCode,
-                    newBehavior->metaState, newBehavior->character,
-                    newBehavior->fallbackKeyCode, newBehavior->replacementKeyCode);
+            ALOGD("Parsed key meta: keyCode=%d, meta=0x%x, char=%d, fallback=%d.", mKeyCode,
+                    newBehavior->metaState, newBehavior->character, newBehavior->fallbackKeyCode);
 #endif
             break;
         }

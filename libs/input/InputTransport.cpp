@@ -1,3 +1,8 @@
+/*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
 //
 // Copyright 2010 The Android Open Source Project
 //
@@ -8,16 +13,16 @@
 //#define LOG_NDEBUG 0
 
 // Log debug messages about channel messages (send message, receive message)
-#define DEBUG_CHANNEL_MESSAGES 0
+#define DEBUG_CHANNEL_MESSAGES 1
 
 // Log debug messages whenever InputChannel objects are created/destroyed
-#define DEBUG_CHANNEL_LIFECYCLE 0
+#define DEBUG_CHANNEL_LIFECYCLE 1
 
 // Log debug messages about transport actions
-#define DEBUG_TRANSPORT_ACTIONS 0
+#define DEBUG_TRANSPORT_ACTIONS 1
 
 // Log debug messages about touch event resampling
-#define DEBUG_RESAMPLING 0
+#define DEBUG_RESAMPLING 1
 
 
 #include <errno.h>
@@ -26,12 +31,18 @@
 #include <math.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <utils/Trace.h>
 #include <unistd.h>
 
 #include <cutils/log.h>
 #include <cutils/properties.h>
 #include <input/InputTransport.h>
 
+/// M: Switch log by command @{
+static bool gInputLogEnabled = false;
+#undef ALOGD
+#define ALOGD(...) if (gInputLogEnabled) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+/// @}
 
 namespace android {
 
@@ -50,10 +61,6 @@ static const nsecs_t RESAMPLE_LATENCY = 5 * NANOS_PER_MS;
 
 // Minimum time difference between consecutive samples before attempting to resample.
 static const nsecs_t RESAMPLE_MIN_DELTA = 2 * NANOS_PER_MS;
-
-// Maximum time difference between consecutive samples before attempting to resample
-// by extrapolation.
-static const nsecs_t RESAMPLE_MAX_DELTA = 20 * NANOS_PER_MS;
 
 // Maximum time to predict forward from the last known state, to avoid predicting too
 // far into the future.  This time is further bounded by 50% of the last time delta.
@@ -230,6 +237,11 @@ sp<InputChannel> InputChannel::dup() const {
     return fd >= 0 ? new InputChannel(getName(), fd) : NULL;
 }
 
+/// M: Switch log by command
+void InputChannel::switchInputLog(bool enable) {
+    gInputLogEnabled = enable;
+}
+
 
 // --- InputPublisher ---
 
@@ -301,6 +313,23 @@ status_t InputPublisher::publishMotionEvent(
         uint32_t pointerCount,
         const PointerProperties* pointerProperties,
         const PointerCoords* pointerCoords) {
+    /** M: MET_publish milestone. @{ */
+    {
+        char buff[256];
+        /* print window name*/
+        snprintf(buff, sizeof(buff), "MET_publish_name: %s",mChannel->getName().string());
+        ScopedTrace _publish_name(ATRACE_TAG_INPUT, buff);
+
+        /* print publish event*/
+        snprintf(buff, sizeof(buff), "MET_publish: %llx,%d,%x,%x",
+            eventTime,
+            action,
+            (int)pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_X),
+            (int)pointerCoords[0].getAxisValue(AMOTION_EVENT_AXIS_Y));
+        ScopedTrace _publish_action(ATRACE_TAG_INPUT, buff);
+    }
+    /** @} */
+
 #if DEBUG_TRANSPORT_ACTIONS
     ALOGD("channel '%s' publisher ~ publishMotionEvent: seq=%u, deviceId=%d, source=0x%x, "
             "action=0x%x, actionButton=0x%08x, flags=0x%x, edgeFlags=0x%x, "
@@ -344,6 +373,16 @@ status_t InputPublisher::publishMotionEvent(
     for (uint32_t i = 0; i < pointerCount; i++) {
         msg.body.motion.pointers[i].properties.copyFrom(pointerProperties[i]);
         msg.body.motion.pointers[i].coords.copyFrom(pointerCoords[i]);
+
+        /// M: input systrace @{
+        if (ATRACE_ENABLED()) {
+            char buffer[50];
+            sprintf(buffer, "pub_x : %d, pub_y : %d, seq=%u",
+                (int)pointerCoords[i].getX(), (int)pointerCoords[i].getY(), seq);
+            ATRACE_BEGIN(buffer);
+            ATRACE_END();
+        }
+        /// @}
     }
     return mChannel->sendMessage(&msg);
 }
@@ -376,6 +415,13 @@ status_t InputPublisher::receiveFinishedSignal(uint32_t* outSeq, bool* outHandle
 InputConsumer::InputConsumer(const sp<InputChannel>& channel) :
         mResampleTouch(isTouchResamplingEnabled()),
         mChannel(channel), mMsgDeferred(false) {
+    /// M: [Enable input client logs] @{
+    char prop[PROPERTY_VALUE_MAX];
+    property_get("debug.inputclient.enable", prop, "0");
+    if (atoi(prop)) {
+        gInputLogEnabled = true;
+    }
+    /// @}
 }
 
 InputConsumer::~InputConsumer() {
@@ -728,7 +774,7 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
         nsecs_t delta = future.eventTime - current->eventTime;
         if (delta < RESAMPLE_MIN_DELTA) {
 #if DEBUG_RESAMPLING
-            ALOGD("Not resampled, delta time is too small: %lld ns.", delta);
+            ALOGD("Not resampled, delta time is %lld ns.", delta);
 #endif
             return;
         }
@@ -740,12 +786,7 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
         nsecs_t delta = current->eventTime - other->eventTime;
         if (delta < RESAMPLE_MIN_DELTA) {
 #if DEBUG_RESAMPLING
-            ALOGD("Not resampled, delta time is too small: %lld ns.", delta);
-#endif
-            return;
-        } else if (delta > RESAMPLE_MAX_DELTA) {
-#if DEBUG_RESAMPLING
-            ALOGD("Not resampled, delta time is too large: %lld ns.", delta);
+            ALOGD("Not resampled, delta time is %lld ns.", delta);
 #endif
             return;
         }
@@ -791,6 +832,15 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
                     otherCoords.getX(), otherCoords.getY(),
                     alpha);
 #endif
+            /** M: MET_resample milestone. @{ */
+            char buff[256];
+            snprintf(buff, sizeof(buff), "MET_resample: %lld, %lld, %0.6f, %0.6f", sampleTime,
+                other->eventTime, otherCoords.getX(), otherCoords.getY());
+            ScopedTrace _resample1(ATRACE_TAG_INPUT, buff);
+            snprintf(buff, sizeof(buff), "MET_resample: %lld, %lld, %0.6f, %0.6f", sampleTime,
+                current->eventTime, currentCoords.getX(), currentCoords.getY());
+            ScopedTrace _resample2(ATRACE_TAG_INPUT, buff);
+            /** @} @*/
         } else {
             resampledCoords.copyFrom(currentCoords);
 #if DEBUG_RESAMPLING
@@ -798,6 +848,12 @@ void InputConsumer::resampleTouchState(nsecs_t sampleTime, MotionEvent* event,
                     id, resampledCoords.getX(), resampledCoords.getY(),
                     currentCoords.getX(), currentCoords.getY());
 #endif
+            /** M: MET_resample milestone. @{ */
+            char buff[256];
+            snprintf(buff, sizeof(buff), "MET_resample: %lld, %lld, %0.6f, %0.6f", sampleTime,
+                current->eventTime, currentCoords.getX(), currentCoords.getY());
+            ScopedTrace _resample(ATRACE_TAG_INPUT, buff);
+            /** @} @*/
         }
     }
 
@@ -859,6 +915,15 @@ status_t InputConsumer::sendUnchainedFinishedSignal(uint32_t seq, bool handled) 
     msg.header.type = InputMessage::TYPE_FINISHED;
     msg.body.finished.seq = seq;
     msg.body.finished.handled = handled;
+    /// M: input systrace  @{
+    if (ATRACE_ENABLED()) {
+        char buffer[50];
+        sprintf(buffer, "finish seq = %d, handled=%s", seq,
+            handled ? "true" : "false");
+        ATRACE_BEGIN(buffer);
+        ATRACE_END();
+    }
+    /// @}
     return mChannel->sendMessage(&msg);
 }
 

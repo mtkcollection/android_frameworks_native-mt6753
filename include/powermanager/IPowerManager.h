@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -41,6 +46,9 @@ public:
             bool isOneWay = false) = 0;
     // oneway in the .aidl
     virtual status_t powerHint(int hintId, int data) = 0;
+
+    virtual status_t startBacklight(const int) = 0;
+    virtual status_t stopBacklight(void) = 0;
 };
 
 // ----------------------------------------------------------------------------

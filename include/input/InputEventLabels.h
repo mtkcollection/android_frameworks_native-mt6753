@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -303,6 +308,10 @@ static const InputEventLabel KEYCODES[] = {
     DEFINE_KEYCODE(NAVIGATE_NEXT),
     DEFINE_KEYCODE(NAVIGATE_IN),
     DEFINE_KEYCODE(NAVIGATE_OUT),
+    DEFINE_KEYCODE(MEDIA_SKIP_FORWARD),
+    DEFINE_KEYCODE(MEDIA_SKIP_BACKWARD),
+    DEFINE_KEYCODE(MEDIA_STEP_FORWARD),
+    DEFINE_KEYCODE(MEDIA_STEP_BACKWARD),
 
     { NULL, 0 }
 };

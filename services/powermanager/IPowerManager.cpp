@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2011 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -34,6 +39,9 @@ enum {
     RELEASE_WAKE_LOCK = IBinder::FIRST_CALL_TRANSACTION + 2,
     UPDATE_WAKE_LOCK_UIDS = IBinder::FIRST_CALL_TRANSACTION + 3,
     POWER_HINT = IBinder::FIRST_CALL_TRANSACTION + 4,
+
+    STARTBACKLIGHT = IBinder::FIRST_CALL_TRANSACTION + 10,
+    STOPBACKLIGHT = IBinder::FIRST_CALL_TRANSACTION + 11,
 };
 
 class BpPowerManager : public BpInterface<IPowerManager>
@@ -103,6 +111,19 @@ public:
         data.writeInt32(param);
         // This FLAG_ONEWAY is in the .aidl, so there is no way to disable it
         return remote()->transact(POWER_HINT, data, &reply, IBinder::FLAG_ONEWAY);
+    }
+
+    virtual status_t startBacklight(int msec){
+        Parcel data, reply;
+        data.writeInterfaceToken(IPowerManager::getInterfaceDescriptor());
+        data.writeInt32(msec);
+        return remote()->transact(STARTBACKLIGHT, data, &reply);
+    }
+
+    virtual status_t stopBacklight(void){
+        Parcel data, reply;
+        data.writeInterfaceToken(IPowerManager::getInterfaceDescriptor());
+        return remote()->transact(STOPBACKLIGHT, data, &reply);
     }
 };
 

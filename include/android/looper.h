@@ -14,14 +14,6 @@
  * limitations under the License.
  */
 
-/**
- * @addtogroup Looper
- * @{
- */
-
-/**
- * @file looper.h
- */
 
 #ifndef ANDROID_LOOPER_H
 #define ANDROID_LOOPER_H
@@ -30,7 +22,6 @@
 extern "C" {
 #endif
 
-struct ALooper;
 /**
  * ALooper
  *
@@ -44,6 +35,7 @@ struct ALooper;
  *
  * A thread can have only one ALooper associated with it.
  */
+struct ALooper;
 typedef struct ALooper ALooper;
 
 /**
@@ -52,14 +44,13 @@ typedef struct ALooper ALooper;
  */
 ALooper* ALooper_forThread();
 
-/** Option for for ALooper_prepare(). */
 enum {
     /**
-     * This looper will accept calls to ALooper_addFd() that do not
-     * have a callback (that is provide NULL for the callback).  In
-     * this case the caller of ALooper_pollOnce() or ALooper_pollAll()
-     * MUST check the return from these functions to discover when
-     * data is available on such fds and process it.
+     * Option for ALooper_prepare: this looper will accept calls to
+     * ALooper_addFd() that do not have a callback (that is provide NULL
+     * for the callback).  In this case the caller of ALooper_pollOnce()
+     * or ALooper_pollAll() MUST check the return from these functions to
+     * discover when data is available on such fds and process it.
      */
     ALOOPER_PREPARE_ALLOW_NON_CALLBACKS = 1<<0
 };
@@ -73,9 +64,9 @@ enum {
  */
 ALooper* ALooper_prepare(int opts);
 
-/** Result from ALooper_pollOnce() and ALooper_pollAll(). */
 enum {
     /**
+     * Result from ALooper_pollOnce() and ALooper_pollAll():
      * The poll was awoken using wake() before the timeout expired
      * and no callbacks were executed and no other file descriptors were ready.
      */
@@ -185,12 +176,10 @@ typedef int (*ALooper_callbackFunc)(int fd, int events, void* data);
  *
  * Returns ALOOPER_POLL_ERROR if an error occurred.
  *
- * Returns a value >= 0 containing an identifier (the same identifier
- * `ident` passed to ALooper_addFd()) if its file descriptor has data
- * and it has no callback function (requiring the caller here to
- * handle it).  In this (and only this) case outFd, outEvents and
- * outData will contain the poll events and data associated with the
- * fd, otherwise they will be set to NULL.
+ * Returns a value >= 0 containing an identifier if its file descriptor has data
+ * and it has no callback function (requiring the caller here to handle it).
+ * In this (and only this) case outFd, outEvents and outData will contain the poll
+ * events and data associated with the fd, otherwise they will be set to NULL.
  *
  * This method does not return until it has finished invoking the appropriate callbacks
  * for all file descriptors that were signalled.
@@ -265,5 +254,3 @@ int ALooper_removeFd(ALooper* looper, int fd);
 #endif
 
 #endif // ANDROID_LOOPER_H
-
-/** @} */

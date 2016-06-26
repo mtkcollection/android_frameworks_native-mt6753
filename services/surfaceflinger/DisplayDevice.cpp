@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -39,6 +44,13 @@
 #include "DisplayDevice.h"
 #include "SurfaceFlinger.h"
 #include "Layer.h"
+
+#ifdef MTK_AOSP_ENHANCEMENT
+// additional mtk utils and debug info
+#include "mediatek/SurfaceFlingerWatchDog.h"
+#include <sys/time.h>
+#include <time.h>
+#endif
 
 // ----------------------------------------------------------------------------
 using namespace android;
@@ -126,11 +138,43 @@ DisplayDevice::DisplayDevice(
     mPowerMode = (mType >= DisplayDevice::DISPLAY_VIRTUAL) ?
                   HWC_POWER_MODE_NORMAL : HWC_POWER_MODE_OFF;
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    mHwOrientation = DisplayState::eOrientationDefault;
+    //get disp create time and transform to readable format
+    String8 info;
+    struct timeval t;
+    char date[128];
+
+    t.tv_sec = t.tv_usec = 0;
+    gettimeofday(&t, NULL);
+    time_t tm = t.tv_sec;
+
+    strftime(date, sizeof(date), "%Y-%m-%d %H:%M:%S", localtime(&tm));
+    info = String8::format("[create time] %s.%ld", date, t.tv_usec);
+
+    if (mType == DisplayDevice::DISPLAY_VIRTUAL) {
+        SFWatchDog::getInstance()->registerVirtualDisplay(mNativeWindow, info);
+    }
+#endif
+
     // Name the display.  The name will be replaced shortly if the display
     // was created with createDisplay().
     switch (mType) {
         case DISPLAY_PRIMARY:
             mDisplayName = "Built-in Screen";
+#ifdef MTK_AOSP_ENHANCEMENT
+            switch (mFlinger->sPropertiesState.mHwRotation) {
+                case 90:
+                    mHwOrientation = DisplayState::eOrientation90;
+                    break;
+                case 180:
+                    mHwOrientation = DisplayState::eOrientation180;
+                    break;
+                case 270:
+                    mHwOrientation = DisplayState::eOrientation270;
+                    break;
+            }
+#endif
             break;
         case DISPLAY_EXTERNAL:
             mDisplayName = "HDMI Screen";
@@ -158,6 +202,11 @@ void DisplayDevice::disconnect(HWComposer& hwc) {
             hwc.freeDisplayId(mHwcDisplayId);
         mHwcDisplayId = -1;
     }
+#ifdef MTK_AOSP_ENHANCEMENT
+    if (mType == DisplayDevice::DISPLAY_VIRTUAL) {
+        SFWatchDog::getInstance()->unregisterVirtualDisplay(mNativeWindow);
+    }
+#endif
 }
 
 bool DisplayDevice::isValid() const {
@@ -244,6 +293,12 @@ void DisplayDevice::swapBuffers(HWComposer& hwc) const {
     if (hwc.initCheck() != NO_ERROR ||
             (hwc.hasGlesComposition(mHwcDisplayId) &&
              (hwc.supportsFramebufferTarget() || mType >= DISPLAY_VIRTUAL))) {
+#ifdef MTK_AOSP_ENHANCEMENT
+        // debug line that indicates we are using G3D rendering
+        if (CC_UNLIKELY(mFlinger->sPropertiesState.mLineG3D)) {
+            drawDebugLine();
+        }
+#endif
         EGLBoolean success = eglSwapBuffers(mDisplay, mSurface);
         if (!success) {
             EGLint error = eglGetError();
@@ -263,6 +318,18 @@ void DisplayDevice::swapBuffers(HWComposer& hwc) const {
         ALOGE("[%s] failed pushing new frame to HWC: %d",
                 mDisplayName.string(), result);
     }
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    // log display device FPS info for performace check
+    if (true == mFps.update()) {
+        ALOGI("[%s (type:%d)] fps:%f,dur:%.2f,max:%.2f,min:%.2f",
+            mDisplayName.string(), mType,
+            mFps.getFps(),
+            mFps.getLastLogDuration() / 1e6,
+            mFps.getMaxDuration() / 1e6,
+            mFps.getMinDuration() / 1e6);
+    }
+#endif
 }
 
 void DisplayDevice::onSwapBuffersCompleted(HWComposer& hwc) const {
@@ -459,6 +526,16 @@ void DisplayDevice::setProjection(int orientation,
 
     dirtyRegion.set(getBounds());
 
+#ifdef MTK_AOSP_ENHANCEMENT
+    // for boot animation black screen issue
+    if ((false == mFlinger->getBootFinished()) && (DISPLAY_PRIMARY == mType)) {
+        ALOGI("[%s] clear DisplayDevice(type:%d) dirty region while booting",
+            __FUNCTION__, mType);
+
+        dirtyRegion.clear();
+    }
+#endif
+
     Transform TL, TP, S;
     float src_width  = viewport.width();
     float src_height = viewport.height();
@@ -476,6 +553,16 @@ void DisplayDevice::setProjection(int orientation,
     float dst_y = frame.top;
     TL.set(-src_x, -src_y);
     TP.set(dst_x, dst_y);
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    // need to take care of HW rotation for mGlobalTransform
+    // for case if the panel is not installed align with device orientation
+    if (DisplayState::eOrientationDefault != mHwOrientation) {
+        DisplayDevice::orientationToTransfrom(
+            (orientation + mHwOrientation) % (DisplayState::eOrientation270 + 1),
+            w, h, &R);
+    }
+#endif
 
     // The viewport and frame are both in the logical orientation.
     // Apply the logical translation, scale to physical size, apply the
@@ -515,6 +602,11 @@ void DisplayDevice::dump(String8& result) const {
         tr[0][0], tr[1][0], tr[2][0],
         tr[0][1], tr[1][1], tr[2][1],
         tr[0][2], tr[1][2], tr[2][2]);
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    result.appendFormat(
+        "   hworient=%2d\n", mHwOrientation);
+#endif
 
     String8 surfaceDump;
     mDisplaySurface->dumpAsString(surfaceDump);

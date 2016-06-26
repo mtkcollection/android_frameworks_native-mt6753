@@ -14,15 +14,6 @@
  * limitations under the License.
  */
 
-/**
- * @addtogroup NativeActivity Native Activity
- * @{
- */
-
-/**
- * @file native_window_jni.h
- */
-
 #ifndef ANDROID_NATIVE_WINDOW_JNI_H
 #define ANDROID_NATIVE_WINDOW_JNI_H
 
@@ -47,5 +38,3 @@ ANativeWindow* ANativeWindow_fromSurface(JNIEnv* env, jobject surface);
 #endif
 
 #endif // ANDROID_NATIVE_WINDOW_H
-
-/** @} */

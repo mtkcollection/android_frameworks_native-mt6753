@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -31,6 +36,10 @@
 #include <utils/Thread.h>
 #include <utils/Timers.h>
 #include <utils/Vector.h>
+
+#ifdef MTK_AOSP_ENHANCEMENT
+#include <hwc_priv.h>
+#endif
 
 extern "C" int clock_nanosleep(clockid_t clock_id, int flags,
                            const struct timespec *request,
@@ -174,6 +183,9 @@ public:
         virtual void setAcquireFenceFd(int fenceFd) = 0;
         virtual void setPlaneAlpha(uint8_t alpha) = 0;
         virtual void onDisplayed() = 0;
+#ifdef MTK_AOSP_ENHANCEMENT
+        virtual void setDim(bool dim) = 0;
+#endif
     };
 
     /*
@@ -257,7 +269,6 @@ public:
         float xdpi;
         float ydpi;
         nsecs_t refresh;
-        int colorTransform;
     };
 
     // Query display parameters.  Pass in a display index (e.g.
@@ -295,6 +306,9 @@ public:
     public:
         VSyncThread(HWComposer& hwc);
         void setEnabled(bool enabled);
+#ifdef MTK_AOSP_ENHANCEMENT
+        void updatePeriod(String8 &result);
+#endif
     };
 
     friend class VSyncThread;
@@ -346,6 +360,11 @@ private:
 
         // protected by mEventControlLock
         int32_t events;
+
+#ifdef MTK_AOSP_ENHANCEMENT
+        uint8_t subtype;
+        uint32_t orientation;
+#endif
     };
 
     sp<SurfaceFlinger>              mFlinger;
@@ -372,6 +391,20 @@ private:
 
     // thread-safe
     mutable Mutex mEventControlLock;
+
+#ifdef MTK_AOSP_ENHANCEMENT
+public:
+    uint8_t getSubType(int disp) const;
+
+    status_t setDisplayOrientation(int32_t id, uint32_t orientation);
+
+    void updateVSynThreadPeriod(String8 &result);
+
+    void skipDisplay(int32_t id);
+
+    // platform features
+    hwc_feature_t mFeaturesState;
+#endif
 };
 
 // ---------------------------------------------------------------------------

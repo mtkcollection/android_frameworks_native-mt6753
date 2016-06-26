@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright 2014 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +38,38 @@
 #include <list>
 #include <set>
 
+#ifdef MTK_AOSP_ENHANCEMENT
+// class BufferQueueDebug cannot include by forward declaration.
+// Because of the performance issue, BufferQueueCore holds a BufferQueueDebug
+// object directly.
+#include <gui/mediatek/BufferQueueDebug.h>
+#ifdef MTK_COMPILE_BUFFERQUEUECORE
+#define BQ_LOGV(x, ...) ALOGV("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), this, debugger.mId, debugger.mConnectedApi, debugger.mProducerPid, debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGD(x, ...) ALOGD("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), this, debugger.mId, debugger.mConnectedApi, debugger.mProducerPid, debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGI(x, ...) ALOGI("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), this, debugger.mId, debugger.mConnectedApi, debugger.mProducerPid, debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGW(x, ...) ALOGW("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), this, debugger.mId, debugger.mConnectedApi, debugger.mProducerPid, debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGE(x, ...) ALOGE("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), this, debugger.mId, debugger.mConnectedApi, debugger.mProducerPid, debugger.mConsumerPid, ##__VA_ARGS__)
+#else // MTK_COMPILE_BUFFERQUEUECORE
+#define BQ_LOGV(x, ...) ALOGV("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), mCore.get(), mCore->debugger.mId, mCore->debugger.mConnectedApi, mCore->debugger.mProducerPid, mCore->debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGD(x, ...) ALOGD("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), mCore.get(), mCore->debugger.mId, mCore->debugger.mConnectedApi, mCore->debugger.mProducerPid, mCore->debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGI(x, ...) ALOGI("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), mCore.get(), mCore->debugger.mId, mCore->debugger.mConnectedApi, mCore->debugger.mProducerPid, mCore->debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGW(x, ...) ALOGW("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), mCore.get(), mCore->debugger.mId, mCore->debugger.mConnectedApi, mCore->debugger.mProducerPid, mCore->debugger.mConsumerPid, ##__VA_ARGS__)
+#define BQ_LOGE(x, ...) ALOGE("[%s](this:%p,id:%d,api:%d,p:%d,c:%d) "x, mConsumerName.string(), mCore.get(), mCore->debugger.mId, mCore->debugger.mConnectedApi, mCore->debugger.mProducerPid, mCore->debugger.mConsumerPid, ##__VA_ARGS__)
+#endif // MTK_COMPILE_BUFFERQUEUECORE
+
+#define ATRACE_BUFFER_INDEX(index)                                                  \
+    if (ATRACE_ENABLED()) {                                                         \
+        char ___traceBuf[1024];                                                     \
+        if (mCore->mSlots[index].mGraphicBuffer != NULL) {                          \
+            snprintf(___traceBuf, 1024, "%s: %d (h:%p)", mConsumerName.string(),    \
+                (index), (mCore->mSlots[index].mGraphicBuffer->handle));            \
+        } else {                                                                    \
+            snprintf(___traceBuf, 1024, "%s: %d", mConsumerName.string(),           \
+                (index));                                                           \
+        }                                                                           \
+        android::ScopedTrace ___bufTracer(ATRACE_TAG, ___traceBuf);                 \
+    }
+#else // MTK_AOSP_ENHANCEMENT
 #define BQ_LOGV(x, ...) ALOGV("[%s] " x, mConsumerName.string(), ##__VA_ARGS__)
 #define BQ_LOGD(x, ...) ALOGD("[%s] " x, mConsumerName.string(), ##__VA_ARGS__)
 #define BQ_LOGI(x, ...) ALOGI("[%s] " x, mConsumerName.string(), ##__VA_ARGS__)
@@ -46,6 +83,7 @@
                 mCore->mConsumerName.string(), (index));             \
         android::ScopedTrace ___bufTracer(ATRACE_TAG, ___traceBuf);  \
     }
+#endif // MTK_AOSP_ENHANCEMENT
 
 namespace android {
 
@@ -57,6 +95,11 @@ class BufferQueueCore : public virtual RefBase {
 
     friend class BufferQueueProducer;
     friend class BufferQueueConsumer;
+#ifdef MTK_AOSP_ENHANCEMENT
+    friend class BufferQueueDump;
+    friend class BufferQueueDebug;
+    friend class BufferQueueMonitor;
+#endif
 
 public:
     // Used as a placeholder slot number when the value isn't pointing to an
@@ -280,6 +323,10 @@ private:
     // number will fail.
     uint32_t mGenerationNumber;
 
+#ifdef MTK_AOSP_ENHANCEMENT
+public:
+    BufferQueueDebug debugger;
+#endif
 }; // class BufferQueueCore
 
 } // namespace android

@@ -106,6 +106,57 @@ LOCAL_SHARED_LIBRARIES := \
     libgui \
     libpowermanager
 
+# --- MediaTek ---------------------------------------------------------------
+ifneq (, $(findstring MTK_AOSP_ENHANCEMENT, $(COMMON_GLOBAL_CPPFLAGS)))
+	LOCAL_SRC_FILES += \
+		mediatek/DisplayDevice.cpp \
+		mediatek/SurfaceFlinger.cpp \
+		mediatek/DisplayHardware/HWComposer.cpp \
+		mediatek/RenderEngine/RenderEngine.cpp \
+		mediatek/RenderEngine/GLES11RenderEngine.cpp \
+		mediatek/RenderEngine/GLES20RenderEngine.cpp \
+		mediatek/SurfaceFlingerWatchDog.cpp \
+		mediatek/Layer.cpp
+
+ifneq ($(strip $(TARGET_BUILD_VARIANT)), eng)
+	LOCAL_CFLAGS += -DMTK_USER_BUILD
+endif
+
+ifeq ($(MTK_EMULATOR_SUPPORT), yes)
+	LOCAL_CFLAGS += -DMTK_EMULATOR_SUPPORT
+endif
+
+ifeq ($(HAVE_AEE_FEATURE), yes)
+	LOCAL_CFLAGS += -DHAVE_AEE_FEATURE
+	LOCAL_SHARED_LIBRARIES += libaed
+endif
+
+	LOCAL_REQUIRED_MODULES += \
+		drm_disable_icon.png
+
+	LOCAL_SHARED_LIBRARIES += \
+		libskia \
+		libui_ext \
+		libselinux
+
+	LOCAL_C_INCLUDES += \
+		$(TOP)/$(MTK_ROOT)/hardware/hwcomposer/include \
+		$(TOP)/$(MTK_ROOT)/hardware/ui_ext/inc \
+		$(TOP)/$(MTK_ROOT)/hardware/gralloc_extra/include \
+		$(TOP)/$(MTK_ROOT)/external/aee/binary/inc
+
+ifneq ($(MTK_EMULATOR_SUPPORT), yes)
+	LOCAL_STATIC_LIBRARIES += \
+		libsurfaceflinger_mediatek
+	LOCAL_SHARED_LIBRARIES += \
+		libged
+	LOCAL_C_INCLUDES += \
+		$(TOP)/$(MTK_ROOT)/hardware/gpu/include
+endif
+endif
+# ----------------------------------------------------------------------------
+
+
 LOCAL_MODULE := libsurfaceflinger
 
 LOCAL_CFLAGS += -Wall -Werror -Wunused -Wunreachable-code
@@ -134,6 +185,15 @@ LOCAL_SHARED_LIBRARIES := \
     libdl
 
 LOCAL_WHOLE_STATIC_LIBRARIES := libsigchain
+
+# --- MediaTek ---------------------------------------------------------------
+ifneq (, $(findstring MTK_AOSP_ENHANCEMENT, $(COMMON_GLOBAL_CPPFLAGS)))
+	LOCAL_C_INCLUDES := \
+		$(TOP)/$(MTK_ROOT)/hardware/hwcomposer/include \
+		$(TOP)/$(MTK_ROOT)/hardware/include \
+		$(TOP)/$(MTK_ROOT)/hardware/ui_ext/inc
+endif
+# ----------------------------------------------------------------------------
 
 LOCAL_MODULE := surfaceflinger
 

@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -47,7 +52,7 @@
 
 // ---------------------------------------------------------------------------
 
-#define DEBUG_CONNECTIONS   false
+#define DEBUG_CONNECTIONS   true
 // Max size is 100 KB which is enough to accept a batch of about 1000 events.
 #define MAX_SOCKET_BUFFER_SIZE_BATCHED 100 * 1024
 // For older HALs which don't support batching, use a smaller socket buffer size.

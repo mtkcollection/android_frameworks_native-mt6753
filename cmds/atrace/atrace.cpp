@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2012 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,6 +93,8 @@ static const TracingCategory k_categories[] = {
     { "res",        "Resource Loading", ATRACE_TAG_RESOURCES, { } },
     { "dalvik",     "Dalvik VM",        ATRACE_TAG_DALVIK, { } },
     { "rs",         "RenderScript",     ATRACE_TAG_RS, { } },
+    { "hwui",       "HWUI",             ATRACE_TAG_HWUI, { } },
+    { "perf",       "Performance",      ATRACE_TAG_PERF, { } },
     { "bionic",     "Bionic C Library", ATRACE_TAG_BIONIC, { } },
     { "power",      "Power Management", ATRACE_TAG_POWER, { } },
     { "sched",      "CPU Scheduling",   0, {
@@ -264,27 +271,9 @@ static bool appendStr(const char* filename, const char* str)
 static void writeClockSyncMarker()
 {
   char buffer[128];
-  int len = 0;
-  int fd = open(k_traceMarkerPath, O_WRONLY);
-  if (fd == -1) {
-      fprintf(stderr, "error opening %s: %s (%d)\n", k_traceMarkerPath,
-              strerror(errno), errno);
-      return;
-  }
   float now_in_seconds = systemTime(CLOCK_MONOTONIC) / 1000000000.0f;
-
-  len = snprintf(buffer, 128, "trace_event_clock_sync: parent_ts=%f\n", now_in_seconds);
-  if (write(fd, buffer, len) != len) {
-      fprintf(stderr, "error writing clock sync marker %s (%d)\n", strerror(errno), errno);
-  }
-
-  int64_t realtime_in_ms = systemTime(CLOCK_REALTIME) / 1000000;
-  len = snprintf(buffer, 128, "trace_event_clock_sync: realtime_ts=%" PRId64 "\n", realtime_in_ms);
-  if (write(fd, buffer, len) != len) {
-      fprintf(stderr, "error writing clock sync marker %s (%d)\n", strerror(errno), errno);
-  }
-
-  close(fd);
+  snprintf(buffer, 128, "trace_event_clock_sync: parent_ts=%f\n", now_in_seconds);
+  writeStr(k_traceMarkerPath, buffer);
 }
 
 // Enable or disable a kernel option by writing a "1" or a "0" into a /sys
@@ -594,7 +583,11 @@ static bool setUpTrace()
     ok &= setTraceOverwriteEnable(g_traceOverwrite);
     ok &= setTraceBufferSizeKB(g_traceBufferSizeKB);
     ok &= setGlobalClockEnable(true);
-    ok &= setPrintTgidEnableIfPresent(true);
+
+    /*
+     * M: Disable by MTK
+     */
+    //ok &= setPrintTgidEnableIfPresent(true);
     ok &= setKernelTraceFuncs(g_kernelTraceFuncs);
 
     // Set up the tags property.
@@ -664,6 +657,7 @@ static bool startTrace()
 // Disable tracing in the kernel.
 static void stopTrace()
 {
+    writeClockSyncMarker();
     setTracingEnabled(false);
 }
 
@@ -860,6 +854,7 @@ int main(int argc, char **argv)
             {"async_stop",      no_argument, 0,  0 },
             {"async_dump",      no_argument, 0,  0 },
             {"list_categories", no_argument, 0,  0 },
+            {"poke_services",   no_argument, 0,  0 },
             {           0,                0, 0,  0 }
         };
 
@@ -925,6 +920,9 @@ int main(int argc, char **argv)
                 } else if (!strcmp(long_options[option_index].name, "list_categories")) {
                     listSupportedCategories();
                     exit(0);
+                } else if (!strcmp(long_options[option_index].name, "poke_services")) {
+                    pokeBinderServices();
+                    exit(0);
                 }
             break;
 
@@ -957,7 +955,6 @@ int main(int argc, char **argv)
         // another.
         ok = clearTrace();
 
-        writeClockSyncMarker();
         if (ok && !async) {
             // Sleep to allow the trace to be captured.
             struct timespec timeLeft;

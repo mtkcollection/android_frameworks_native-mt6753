@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  ** Copyright 2007, The Android Open Source Project
  **
  ** Licensed under the Apache License, Version 2.0 (the "License");
@@ -504,6 +509,16 @@ EGLSurface eglCreateWindowSurface(  EGLDisplay dpy, EGLConfig config,
             }
         }
 
+#if ANDROID_RECORDABLE
+        EGLint ori_format = format;
+        if(cnx->egl.eglGetConfigAttrib(iDpy, config, EGL_NATIVE_VISUAL_ID,
+            &format)) {
+            if (format != HAL_PIXEL_FORMAT_YV12) {
+                format = ori_format;
+            }
+            ALOGW("[ANDROID_RECORDABLE] format: %x", format);
+        }
+#endif
         if (format != 0) {
             int err = native_window_set_buffers_format(window, format);
             if (err != 0) {
@@ -595,6 +610,15 @@ EGLBoolean eglDestroySurface(EGLDisplay dpy, EGLSurface surface)
         return setError(EGL_BAD_SURFACE, EGL_FALSE);
 
     egl_surface_t * const s = get_surface(surface);
+    ANativeWindow* window = s->win.get();
+    if (window) {
+        int result = native_window_api_disconnect(window, NATIVE_WINDOW_API_EGL);
+        if (result != OK) {
+            ALOGE("eglDestroySurface: native_window_api_disconnect (win=%p) "
+                  "failed (%#x)",
+                  window, result);
+        }
+    }
     EGLBoolean result = s->cnx->egl.eglDestroySurface(dp->disp.dpy, s->surface);
     if (result == EGL_TRUE) {
         _s.terminate();
@@ -798,6 +822,20 @@ EGLBoolean eglMakeCurrent(  EGLDisplay dpy, EGLSurface draw,
         // this will ALOGE the error
         egl_connection_t* const cnx = &gEGLImpl;
         result = setError(cnx->egl.eglGetError(), EGL_FALSE);
+
+        // MTK {{{{
+        if (NULL != cur_c)
+        {
+            SurfaceRef _cur_r(get_surface(cur_c->read));
+            SurfaceRef _cur_d(get_surface(cur_c->draw));
+
+            cur_c->read = EGL_NO_SURFACE;
+            cur_c->draw = EGL_NO_SURFACE;
+
+            _cur_r.release();
+            _cur_d.release();
+        }
+        // MTK }}}}
     }
     return result;
 }

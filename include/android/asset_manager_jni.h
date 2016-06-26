@@ -14,14 +14,6 @@
  * limitations under the License.
  */
 
-/**
- * @addtogroup Asset
- * @{
- */
-
-/**
- * @file asset_manager_jni.h
- */
 
 #ifndef ANDROID_ASSET_MANAGER_JNI_H
 #define ANDROID_ASSET_MANAGER_JNI_H
@@ -46,5 +38,3 @@ AAssetManager* AAssetManager_fromJava(JNIEnv* env, jobject assetManager);
 #endif
 
 #endif      // ANDROID_ASSET_MANAGER_JNI_H
-
-/** @} */

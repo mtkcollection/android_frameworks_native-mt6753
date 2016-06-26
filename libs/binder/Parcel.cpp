@@ -96,7 +96,7 @@ enum {
 };
 
 void acquire_object(const sp<ProcessState>& proc,
-    const flat_binder_object& obj, const void* who, size_t* outAshmemSize)
+    const flat_binder_object& obj, const void* who)
 {
     switch (obj.type) {
         case BINDER_TYPE_BINDER:
@@ -123,15 +123,8 @@ void acquire_object(const sp<ProcessState>& proc,
             return;
         }
         case BINDER_TYPE_FD: {
-            if (obj.cookie != 0) {
-                if (outAshmemSize != NULL) {
-                    // If we own an ashmem fd, keep track of how much memory it refers to.
-                    int size = ashmem_get_size_region(obj.handle);
-                    if (size > 0) {
-                        *outAshmemSize += size;
-                    }
-                }
-            }
+            // intentionally blank -- nothing to do to acquire this, but we do
+            // recognize it as a legitimate object type.
             return;
         }
     }
@@ -139,14 +132,8 @@ void acquire_object(const sp<ProcessState>& proc,
     ALOGD("Invalid object type 0x%08x", obj.type);
 }
 
-void acquire_object(const sp<ProcessState>& proc,
+void release_object(const sp<ProcessState>& proc,
     const flat_binder_object& obj, const void* who)
-{
-    acquire_object(proc, obj, who, NULL);
-}
-
-static void release_object(const sp<ProcessState>& proc,
-    const flat_binder_object& obj, const void* who, size_t* outAshmemSize)
 {
     switch (obj.type) {
         case BINDER_TYPE_BINDER:
@@ -173,27 +160,12 @@ static void release_object(const sp<ProcessState>& proc,
             return;
         }
         case BINDER_TYPE_FD: {
-            if (outAshmemSize != NULL) {
-                if (obj.cookie != 0) {
-                    int size = ashmem_get_size_region(obj.handle);
-                    if (size > 0) {
-                        *outAshmemSize -= size;
-                    }
-
-                    close(obj.handle);
-                }
-            }
+            if (obj.cookie != 0) close(obj.handle);
             return;
         }
     }
 
     ALOGE("Invalid object type 0x%08x", obj.type);
-}
-
-void release_object(const sp<ProcessState>& proc,
-    const flat_binder_object& obj, const void* who)
-{
-    release_object(proc, obj, who, NULL);
 }
 
 inline static status_t finish_flatten_binder(
@@ -532,7 +504,7 @@ status_t Parcel::appendFrom(const Parcel *parcel, size_t offset, size_t len)
 
             flat_binder_object* flat
                 = reinterpret_cast<flat_binder_object*>(mData + off);
-            acquire_object(proc, *flat, this, &mOpenAshmemSize);
+            acquire_object(proc, *flat, this);
 
             if (flat->type == BINDER_TYPE_FD) {
                 // If this is a file descriptor, we need to dup it so the
@@ -854,7 +826,6 @@ status_t Parcel::writeString16(const String16& str)
 status_t Parcel::writeString16(const char16_t* str, size_t len)
 {
     if (str == NULL) return writeInt32(-1);
-
     status_t err = writeInt32(len);
     if (err == NO_ERROR) {
         len *= sizeof(char16_t);
@@ -917,10 +888,12 @@ status_t Parcel::writeDupFileDescriptor(int fd)
 {
     int dupFd = dup(fd);
     if (dupFd < 0) {
+        ALOGE("writeDupFileDescriptor: error %d dup fd %d\n", errno, fd);
         return -errno;
     }
     status_t err = writeFileDescriptor(dupFd, true /*takeOwnership*/);
     if (err) {
+        ALOGE("writeDupFileDescriptor: error %d write fd %d\n", err, dupFd);
         close(dupFd);
     }
     return err;
@@ -950,6 +923,8 @@ status_t Parcel::writeBlob(size_t len, bool mutableCopy, WritableBlob* outBlob)
     ALOGV("writeBlob: write to ashmem");
     int fd = ashmem_create_region("Parcel Blob", len);
     if (fd < 0) return NO_MEMORY;
+
+    mBlobAshmemSize += len;
 
     int result = ashmem_set_prot_region(fd, PROT_READ | PROT_WRITE);
     if (result < 0) {
@@ -1052,7 +1027,7 @@ restart_write:
         // Need to write meta-data?
         if (nullMetaData || val.binder != 0) {
             mObjects[mObjectsSize] = mDataPos;
-            acquire_object(ProcessState::self(), val, this, &mOpenAshmemSize);
+            acquire_object(ProcessState::self(), val, this);
             mObjectsSize++;
         }
 
@@ -1424,7 +1399,11 @@ status_t Parcel::readBlob(size_t len, ReadableBlob* outBlob) const
 
     void* ptr = ::mmap(NULL, len, isMutable ? PROT_READ | PROT_WRITE : PROT_READ,
             MAP_SHARED, fd, 0);
-    if (ptr == MAP_FAILED) return NO_MEMORY;
+    if (ptr == MAP_FAILED)
+    {
+        ALOGE("readBlob: read from ashmem but fail to mmap fd %d errno %d\n", fd, errno);
+        return NO_MEMORY;
+    }
 
     outBlob->init(fd, ptr, len, isMutable);
     return NO_ERROR;
@@ -1635,7 +1614,7 @@ void Parcel::releaseObjects()
         i--;
         const flat_binder_object* flat
             = reinterpret_cast<flat_binder_object*>(data+objects[i]);
-        release_object(proc, *flat, this, &mOpenAshmemSize);
+        release_object(proc, *flat, this);
     }
 }
 
@@ -1649,7 +1628,7 @@ void Parcel::acquireObjects()
         i--;
         const flat_binder_object* flat
             = reinterpret_cast<flat_binder_object*>(data+objects[i]);
-        acquire_object(proc, *flat, this, &mOpenAshmemSize);
+        acquire_object(proc, *flat, this);
     }
 }
 
@@ -1675,8 +1654,12 @@ void Parcel::freeDataNoInit()
             gParcelGlobalAllocCount--;
             pthread_mutex_unlock(&gParcelGlobalAllocSizeLock);
             free(mData);
+            mData = 0;
         }
-        if (mObjects) free(mObjects);
+        if (mObjects) {
+            free(mObjects);
+            mObjects = NULL;
+        }
     }
 }
 
@@ -1831,7 +1814,7 @@ status_t Parcel::continueWrite(size_t desired)
                     // will need to rescan because we may have lopped off the only FDs
                     mFdsKnown = false;
                 }
-                release_object(proc, *flat, this, &mOpenAshmemSize);
+                release_object(proc, *flat, this);
             }
             binder_size_t* objects =
                 (binder_size_t*)realloc(mObjects, objectsSize*sizeof(binder_size_t));
@@ -1916,7 +1899,7 @@ void Parcel::initState()
     mFdsKnown = true;
     mAllowFds = true;
     mOwner = NULL;
-    mOpenAshmemSize = 0;
+    mBlobAshmemSize = 0;
 }
 
 void Parcel::scanForFds() const
@@ -1936,15 +1919,7 @@ void Parcel::scanForFds() const
 
 size_t Parcel::getBlobAshmemSize() const
 {
-    // This used to return the size of all blobs that were written to ashmem, now we're returning
-    // the ashmem currently referenced by this Parcel, which should be equivalent.
-    // TODO: Remove method once ABI can be changed.
-    return mOpenAshmemSize;
-}
-
-size_t Parcel::getOpenAshmemSize() const
-{
-    return mOpenAshmemSize;
+    return mBlobAshmemSize;
 }
 
 // --- Parcel::Blob ---

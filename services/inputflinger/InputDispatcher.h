@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -261,6 +266,8 @@ public:
      */
     virtual bool checkInjectEventsPermissionNonReentrant(
             int32_t injectorPid, int32_t injectorUid) = 0;
+    /// M: Enhance keydispatching predump
+    virtual void notifyPredump(const sp<InputApplicationHandle>& inputApplicationHandle, const sp<InputWindowHandle>& inputWindowHandle, int32_t pid, int32_t message) = 0;
 };
 
 
@@ -987,6 +994,9 @@ private:
     // Focused application.
     sp<InputApplicationHandle> mFocusedApplicationHandle;
 
+    /// M: Enhance keydispatching predump
+    sp<InputWindowHandle> mFocusedWindow;
+
     // Dispatcher state at time of last ANR.
     String8 mLastANRState;
 
@@ -1017,6 +1027,10 @@ private:
     InputTargetWaitCause mInputTargetWaitCause;
     nsecs_t mInputTargetWaitStartTime;
     nsecs_t mInputTargetWaitTimeoutTime;
+
+    /// M: Enhance keydispatching predump
+    bool mIsPredumping;
+
     bool mInputTargetWaitTimeoutExpired;
     sp<InputApplicationHandle> mInputTargetWaitApplicationHandle;
 

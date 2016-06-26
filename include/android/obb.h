@@ -14,14 +14,6 @@
  * limitations under the License.
  */
 
-/**
- * @addtogroup Storage
- * @{
- */
-
-/**
- * @file obb.h
- */
 
 #ifndef ANDROID_OBB_H
 #define ANDROID_OBB_H
@@ -33,12 +25,9 @@ extern "C" {
 #endif
 
 struct AObbInfo;
-/** {@link AObbInfo} is an opaque type representing information for obb storage. */
 typedef struct AObbInfo AObbInfo;
 
-/** Flag for an obb file, returned by AObbInfo_getFlags(). */
 enum {
-    /** overlay */
     AOBBINFO_OVERLAY = 0x0001,
 };
 
@@ -72,5 +61,3 @@ int32_t AObbInfo_getFlags(AObbInfo* obbInfo);
 #endif
 
 #endif      // ANDROID_OBB_H
-
-/** @} */

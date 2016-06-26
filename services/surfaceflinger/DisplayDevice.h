@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2007 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,6 +37,10 @@
 #include <hardware/hwcomposer_defs.h>
 
 #include "Transform.h"
+
+#ifdef MTK_AOSP_ENHANCEMENT
+#include <FpsCounter.h>
+#endif // MTK_AOSP_ENHANCEMENT
 
 struct ANativeWindow;
 
@@ -226,6 +235,22 @@ private:
     int mPowerMode;
     // Current active config
     int mActiveConfig;
+
+#ifdef MTK_AOSP_ENHANCEMENT
+private:
+    // debugging
+    void drawDebugLine() const;
+
+    int mHwOrientation;
+
+    // for performance check
+    mutable FpsCounter mFps;
+public:
+    // correct geometry by device hw orientation
+    void correctSizeByHwOrientation(uint32_t &w, uint32_t &h) const;
+    void correctRotationByHwOrientation(Transform::orientation_flags &rotation) const;
+    void correctCropByHwOrientation(Rect& crop) const;
+#endif // MTK_AOSP_ENHANCEMENT
 };
 
 }; // namespace android

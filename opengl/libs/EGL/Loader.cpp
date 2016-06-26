@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  ** Copyright 2007, The Android Open Source Project
  **
  ** Licensed under the Apache License, Version 2.0 (the "License");
@@ -298,6 +303,51 @@ void *Loader::load_driver(const char* kind,
                     return result;
                 }
             }
+
+#ifndef MTK_DEFAULT_AOSP
+            /* JB loading mechanism by loading egl.cfg BEGIN */
+            ALOGD("Attempt to load from egl.cfg");
+            FILE* cfg = fopen("/system/lib/egl/egl.cfg", "r");
+            if (cfg == NULL)
+            {
+                // default config
+                ALOGD("egl.cfg not found, using default config");
+                // fallback to KK default path
+            }
+            else
+            {
+                char line[256];
+                char tag[256];
+                while (fgets(line, 256, cfg))
+                {
+                    int dpy, impl;
+                    if (sscanf(line, "%u %u %s", &dpy, &impl, tag) == 3) {
+                        ALOGD(">>> %u %u %s", dpy, impl, tag);
+
+                    }
+                }
+                fclose(cfg);
+
+                // We only load the h/w accelerated implementation
+                if (strcmp(tag,"android"))
+                {
+                    // we look for files that match:
+                    //      libGLES_<tag>.so, or:
+                    //      libEGL_<tag>.so, libGLESv1_CM_<tag>.so, libGLESv2_<tag>.so
+
+                    pattern.append("_");
+                    pattern.append(tag);
+                    for (size_t i=0 ; i<NELEM(searchPaths) ; i++) {
+                        if (find(result, pattern, searchPaths[i], false)) {
+                            return result;
+                        }
+                    }
+                }
+                else
+                    ALOGD("h/w acceleration implementation from egl.cfg not found, using KK method");
+            }
+            /* JB loading mechanism by loading egl.cfg END */
+#endif
 
             // for compatibility with the old "egl.cfg" naming convention
             // we look for files that match:

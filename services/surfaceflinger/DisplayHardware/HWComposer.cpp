@@ -1,4 +1,9 @@
 /*
+* Copyright (C) 2014 MediaTek Inc.
+* Modification based on code covered by the mentioned copyright
+* and/or permission notice(s).
+*/
+/*
  * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -190,6 +195,14 @@ HWComposer::HWComposer(
         // we don't have VSYNC support, we need to fake it
         mVSyncThread = new VSyncThread(*this);
     }
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    // query features state from HWC module
+    memset(&mFeaturesState, 0, sizeof(hwc_feature_t));
+    if (mHwc) {
+        mHwc->query(mHwc, HWC_FEATURES_STATE, (int *)&mFeaturesState);
+    }
+#endif
 }
 
 HWComposer::~HWComposer() {
@@ -298,7 +311,11 @@ void HWComposer::vsync(int disp, int64_t timestamp) {
 
         char tag[16];
         snprintf(tag, sizeof(tag), "HW_VSYNC_%1u", disp);
+#ifdef MTK_AOSP_ENHANCEMENT
+        ATRACE_INT_PERF(tag, ++mVSyncCounts[disp] & 1);
+#else
         ATRACE_INT(tag, ++mVSyncCounts[disp] & 1);
+#endif
 
         mEventHandler.onVSyncReceived(disp, timestamp);
     }
@@ -336,19 +353,12 @@ static const uint32_t DISPLAY_ATTRIBUTES[] = {
     HWC_DISPLAY_HEIGHT,
     HWC_DISPLAY_DPI_X,
     HWC_DISPLAY_DPI_Y,
-    HWC_DISPLAY_COLOR_TRANSFORM,
+#ifdef MTK_AOSP_ENHANCEMENT
+    HWC_DISPLAY_SUBTYPE,
+#endif
     HWC_DISPLAY_NO_ATTRIBUTE,
 };
 #define NUM_DISPLAY_ATTRIBUTES (sizeof(DISPLAY_ATTRIBUTES) / sizeof(DISPLAY_ATTRIBUTES)[0])
-
-static const uint32_t PRE_HWC15_DISPLAY_ATTRIBUTES[] = {
-    HWC_DISPLAY_VSYNC_PERIOD,
-    HWC_DISPLAY_WIDTH,
-    HWC_DISPLAY_HEIGHT,
-    HWC_DISPLAY_DPI_X,
-    HWC_DISPLAY_DPI_Y,
-    HWC_DISPLAY_NO_ATTRIBUTE,
-};
 
 status_t HWComposer::queryDisplayProperties(int disp) {
 
@@ -372,12 +382,6 @@ status_t HWComposer::queryDisplayProperties(int disp) {
     for (size_t c = 0; c < numConfigs; ++c) {
         err = mHwc->getDisplayAttributes(mHwc, disp, configs[c],
                 DISPLAY_ATTRIBUTES, values);
-        // If this is a pre-1.5 HWC, it may not know about color transform, so
-        // try again with a smaller set of attributes
-        if (err != NO_ERROR) {
-            err = mHwc->getDisplayAttributes(mHwc, disp, configs[c],
-                    PRE_HWC15_DISPLAY_ATTRIBUTES, values);
-        }
         if (err != NO_ERROR) {
             // we can't get this display's info. turn it off.
             mDisplayData[disp].connected = false;
@@ -402,9 +406,11 @@ status_t HWComposer::queryDisplayProperties(int disp) {
                 case HWC_DISPLAY_DPI_Y:
                     config.ydpi = values[i] / 1000.0f;
                     break;
-                case HWC_DISPLAY_COLOR_TRANSFORM:
-                    config.colorTransform = values[i];
+#ifdef MTK_AOSP_ENHANCEMENT
+                case HWC_DISPLAY_SUBTYPE:
+                    mDisplayData[disp].subtype = values[i];
                     break;
+#endif
                 default:
                     ALOG_ASSERT(false, "unknown display attribute[%zu] %#x",
                             i, DISPLAY_ATTRIBUTES[i]);
@@ -654,6 +660,9 @@ status_t HWComposer::setFramebufferTarget(int32_t id,
 }
 
 status_t HWComposer::prepare() {
+#ifdef MTK_AOSP_ENHANCEMENT
+    ATRACE_CALL();
+#endif
     Mutex::Autolock _l(mDisplayLock);
     for (size_t i=0 ; i<mNumDisplays ; i++) {
         DisplayData& disp(mDisplayData[i]);
@@ -674,6 +683,9 @@ status_t HWComposer::prepare() {
             if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_3)) {
                 mLists[i]->outbuf = disp.outbufHandle;
                 mLists[i]->outbufAcquireFenceFd = -1;
+#ifdef MTK_AOSP_ENHANCEMENT
+                mLists[i]->flags |= mDisplayData[i].orientation << 16;
+#endif
             } else if (hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_1)) {
                 // garbage data to catch improper use
                 mLists[i]->dpy = (hwc_display_t)0xDEADBEEF;
@@ -681,6 +693,14 @@ status_t HWComposer::prepare() {
             } else {
                 mLists[i]->dpy = EGL_NO_DISPLAY;
                 mLists[i]->sur = EGL_NO_SURFACE;
+#ifdef MTK_AOSP_ENHANCEMENT
+                // External Display related
+                // (only need for HWC_DEVICE_API_VERSION_1_0 or lower version)
+                if (i == 0) {
+                    sp<const DisplayDevice> hw(mFlinger->getDefaultDisplayDevice());
+                    mLists[i]->flags |= hw->getOrientation() << 16;
+                }
+#endif
             }
         }
     }
@@ -760,6 +780,9 @@ sp<Fence> HWComposer::getAndResetReleaseFence(int32_t id) {
 }
 
 status_t HWComposer::commit() {
+#ifdef MTK_AOSP_ENHANCEMENT
+    ATRACE_CALL_PERF();
+#endif
     int err = NO_ERROR;
     if (mHwc) {
         if (!hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_1)) {
@@ -791,6 +814,10 @@ status_t HWComposer::commit() {
                     disp.list->retireFenceFd = -1;
                 }
                 disp.list->flags &= ~HWC_GEOMETRY_CHANGED;
+#ifdef MTK_AOSP_ENHANCEMENT
+                // clear additional flags
+                disp.list->flags &= ~HWC_ORIENTATION_MASK;
+#endif
             }
         }
     }
@@ -862,6 +889,9 @@ int HWComposer::fbPost(int32_t id,
     if (mHwc && hwcHasApiVersion(mHwc, HWC_DEVICE_API_VERSION_1_1)) {
         return setFramebufferTarget(id, acquireFence, buffer);
     } else {
+#ifdef MTK_AOSP_ENHANCEMENT
+        ATRACE_CALL();
+#endif
         acquireFence->waitForever("HWComposer::fbPost");
         return mFbDev->post(mFbDev, buffer->handle);
     }
@@ -1066,6 +1096,11 @@ public:
     virtual void setBuffer(const sp<GraphicBuffer>& buffer) {
         if (buffer == 0 || buffer->handle == 0) {
             getLayer()->compositionType = HWC_FRAMEBUFFER;
+#ifdef MTK_AOSP_ENHANCEMENT
+            // Because HWC would default skip layer with flag HWC_SKIP_LAYER
+            // as the dim layer, no set skip layer to avoid the original design
+            if (0 == (getLayer()->flags & HWC_DIM_LAYER))
+#endif
             getLayer()->flags |= HWC_SKIP_LAYER;
             getLayer()->handle = 0;
         } else {
@@ -1101,6 +1136,16 @@ public:
             surfaceDamage.rects = NULL;
         }
     }
+
+#ifdef MTK_AOSP_ENHANCEMENT
+    virtual void setDim(bool dim) {
+        if (dim) {
+            getLayer()->flags |= HWC_DIM_LAYER;
+        } else {
+            getLayer()->flags &= ~HWC_DIM_LAYER;
+        }
+    }
+#endif
 };
 
 /*
@@ -1181,11 +1226,9 @@ void HWComposer::dump(String8& result) const {
             result.appendFormat("  Display[%zd] configurations (* current):\n", i);
             for (size_t c = 0; c < disp.configs.size(); ++c) {
                 const DisplayConfig& config(disp.configs[c]);
-                result.appendFormat("    %s%zd: %ux%u, xdpi=%f, ydpi=%f"
-                        ", refresh=%" PRId64 ", colorTransform=%d\n",
-                        c == disp.currentConfig ? "* " : "", c,
-                        config.width, config.height, config.xdpi, config.ydpi,
-                        config.refresh, config.colorTransform);
+                result.appendFormat("    %s%zd: %ux%u, xdpi=%f, ydpi=%f, refresh=%" PRId64 "\n",
+                        c == disp.currentConfig ? "* " : "", c, config.width, config.height,
+                        config.xdpi, config.ydpi, config.refresh);
             }
 
             if (disp.list) {
